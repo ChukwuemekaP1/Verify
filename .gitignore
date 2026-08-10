@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Credentials (NEVER commit secrets)
+.veriflow/credentials/DEMO_CREDENTIALS.md
+
+# Build output
+.output/
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Backend
+backend/node_modules/
+backend/.env
+
+# Frontend
+frontend/veriflow-ui/node_modules/
+frontend/veriflow-ui/.output/
+frontend/veriflow-ui/.vinxi/
+frontend/veriflow-ui/.tanstack/
+frontend/veriflow-ui/.wrangler/

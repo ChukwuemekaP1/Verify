@@ -123,11 +123,12 @@ export class VerificationsRepository {
       record.verificationReference = record.generateVerificationReference();
     }
     await record.save();
-    return record
-      .populate('certificate', 'certificateNumber status type awardTitle')
-      .populate('graduate', 'firstName lastName middleName matricNumber')
-      .populate('institution', 'name type status')
-      .execPopulate?.() || record;
+    await record.populate([
+      { path: 'certificate', select: 'certificateNumber status type awardTitle' },
+      { path: 'graduate', select: 'firstName lastName middleName matricNumber' },
+      { path: 'institution', select: 'name type status' },
+    ]);
+    return record;
   }
 
   async update(verificationId, payload, scope = {}) {

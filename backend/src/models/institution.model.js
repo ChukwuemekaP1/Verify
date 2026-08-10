@@ -74,7 +74,6 @@ const institutionSchema = new mongoose.Schema(
       type: String,
       enum: Object.values(INSTITUTION_STATUS),
       default: INSTITUTION_STATUS.PENDING,
-      index: true,
     },
     verificationPrefix: {
       type: String,

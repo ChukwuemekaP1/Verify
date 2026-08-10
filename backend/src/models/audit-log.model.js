@@ -7,6 +7,7 @@ export const AUDIT_ACTION = Object.freeze({
   PUBLISH: 'PUBLISH',
   REVOKE: 'REVOKE',
   VERIFY: 'VERIFY',
+  MANUAL: 'MANUAL',
   CORRECT: 'CORRECT',
   LOGIN: 'LOGIN',
   LOGOUT: 'LOGOUT',
@@ -109,12 +110,10 @@ const auditLogSchema = new mongoose.Schema(
     requestId: {
       type: String,
       trim: true,
-      index: true,
     },
     success: {
       type: Boolean,
       default: true,
-      index: true,
     },
     errorMessage: {
       type: String,

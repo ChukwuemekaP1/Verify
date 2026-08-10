@@ -6,27 +6,16 @@ import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { AuthRepository } from './modules/auth/auth.repository.js';
 import { AuthService } from './modules/auth/auth.service.js';
+import { runSeed } from './seed.js';
 
 const app = createApp();
 const server = createServer(app);
 
 async function runSeeds() {
   try {
-    const authService = new AuthService({ authRepository: new AuthRepository() });
-    const result = await authService.seedSuperAdminIfNeeded();
-    if (result.created) {
-      logger.info(
-        {
-          email: env.SUPER_ADMIN_EMAIL,
-          password: env.SUPER_ADMIN_PASSWORD,
-        },
-        'Super admin account created (default credentials)',
-      );
-    } else {
-      logger.debug('Super admin account already exists, skipping seed');
-    }
+    await runSeed();
   } catch (error) {
-    logger.warn({ err: error }, 'Failed to run auth seed');
+    logger.warn({ err: error }, 'Failed to run seed');
   }
 }
 

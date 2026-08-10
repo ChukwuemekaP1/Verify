@@ -35,7 +35,6 @@ const userSchema = new mongoose.Schema(
       unique: true,
       required: [true, 'Email is required'],
       match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address'],
-      index: true,
     },
     password: {
       type: String,
@@ -58,7 +57,6 @@ const userSchema = new mongoose.Schema(
     institution: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Institution',
-      index: true,
     },
     lastLoginAt: {
       type: Date,

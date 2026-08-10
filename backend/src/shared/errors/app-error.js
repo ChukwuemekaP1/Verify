@@ -15,6 +15,10 @@ export class AppError extends Error {
     return new AppError({ message, statusCode: 401, code: 'UNAUTHORIZED' });
   }
 
+  static forbidden(message = 'Forbidden') {
+    return new AppError({ message, statusCode: 403, code: 'FORBIDDEN' });
+  }
+
   static notFound(message = 'Resource not found') {
     return new AppError({ message, statusCode: 404, code: 'NOT_FOUND' });
   }

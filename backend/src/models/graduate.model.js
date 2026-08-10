@@ -92,7 +92,6 @@ const graduateSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Institution',
       required: [true, 'Institution is required'],
-      index: true,
     },
     dateOfBirth: {
       type: Date,

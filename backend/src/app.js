@@ -18,6 +18,21 @@ function resolveAllowedOrigins() {
   return env.CLIENT_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean);
 }
 
+function corsOriginCallback(origin, callback) {
+  const allowedOrigins = resolveAllowedOrigins();
+  const isAllowed =
+    !origin ||
+    allowedOrigins.includes(origin) ||
+    (env.NODE_ENV === 'development' &&
+      /^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/.test(origin));
+  if (isAllowed) {
+    callback(null, true);
+  } else {
+    logger.warn({ origin, allowedOrigins }, 'CORS: blocked origin');
+    callback(new Error(`Origin ${origin} not allowed by CORS`));
+  }
+}
+
 export function createApp() {
   const app = express();
 
@@ -30,8 +45,13 @@ export function createApp() {
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(
     cors({
-      origin: resolveAllowedOrigins(),
+      origin: corsOriginCallback,
       credentials: true,
+      methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+      maxAge: 86400,
+      optionsSuccessStatus: 204,
+      preflightContinue: false,
     }),
   );
   app.use(

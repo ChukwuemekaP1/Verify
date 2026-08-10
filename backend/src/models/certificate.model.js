@@ -140,7 +140,6 @@ const certificateSchema = new mongoose.Schema(
       sparse: true,
       uppercase: true,
       maxlength: [100, 'Verification reference cannot exceed 100 characters'],
-      index: true,
     },
     verificationMethod: {
       type: String,
@@ -228,7 +227,6 @@ certificateSchema.index({ institution: 1, certificateNumber: 1 }, { unique: true
 certificateSchema.index({ institution: 1, graduate: 1 });
 certificateSchema.index({ institution: 1, status: 1, type: 1 });
 certificateSchema.index({ institution: 1, issueDate: -1 });
-certificateSchema.index({ verificationReference: 1 }, { unique: true, sparse: true });
 
 certificateSchema.virtual('graduateInfo', {
   ref: 'Graduate',

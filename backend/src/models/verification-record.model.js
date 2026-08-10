@@ -25,7 +25,6 @@ const verificationRecordSchema = new mongoose.Schema(
       trim: true,
       required: [true, 'Verification reference is required'],
       unique: true,
-      index: true,
     },
     method: {
       type: String,
@@ -75,7 +74,6 @@ const verificationRecordSchema = new mongoose.Schema(
       min: 0,
       max: 100,
       default: 0,
-      index: true,
     },
     certificateMatchScore: {
       type: Number,
