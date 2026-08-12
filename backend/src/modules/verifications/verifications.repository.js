@@ -169,40 +169,40 @@ export class VerificationsRepository {
   }
 
   async findCandidateCertificates({ certificateNumber, surname, matricNumber, institutionId, awardTitle, programme }) {
-    const filters = [];
     const matchAny = [];
     if (certificateNumber) matchAny.push({ certificateNumber: new RegExp(certificateNumber, 'i') });
-    if (matricNumber) {
-      filters.push({});
+    if (surname) {
+      const grads = await Graduate.find({ lastName: new RegExp(`^${surname}$`, 'i') }).limit(50).exec();
+      const gradIds = grads.map((g) => g._id);
+      if (gradIds.length) matchAny.push({ graduate: { $in: gradIds } });
     }
+    if (matricNumber) {
+      const grads = await Graduate.find({ matricNumber: new RegExp(matricNumber, 'i') }).limit(20).exec();
+      const gradIds = grads.map((g) => g._id);
+      if (gradIds.length) matchAny.push({ graduate: { $in: gradIds } });
+    }
+
     let certFilter = {};
     if (matchAny.length === 1) certFilter = matchAny[0];
     else if (matchAny.length > 1) certFilter = { $or: matchAny };
     if (institutionId) certFilter.institution = institutionId;
+
     let certs = await Certificate.find(certFilter)
       .populate('graduate')
       .populate('institution')
       .limit(20)
       .exec();
 
-    if (certs.length === 0 && surname) {
-      const grads = await Graduate.find({ lastName: new RegExp(`^${surname}$`, 'i') }).limit(20).exec();
-      const gradIds = grads.map((g) => g._id);
-      certs = await Certificate.find({ graduate: { $in: gradIds } })
+    if (certs.length === 0 && certificateNumber) {
+      certs = await Certificate.find({
+        certificateNumber: new RegExp(certificateNumber.replace(/[\-\s]/g, ''), 'i'),
+      })
         .populate('graduate')
         .populate('institution')
         .limit(20)
         .exec();
     }
-    if (certs.length === 0 && matricNumber) {
-      const grads = await Graduate.find({ matricNumber: new RegExp(matricNumber, 'i') }).limit(20).exec();
-      const gradIds = grads.map((g) => g._id);
-      certs = await Certificate.find({ graduate: { $in: gradIds } })
-        .populate('graduate')
-        .populate('institution')
-        .limit(20)
-        .exec();
-    }
+
     return certs;
   }
 

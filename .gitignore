@@ -1,10 +1,10 @@
 # Dependencies
 node_modules/
 
-# Environment files
+# Environment files (all variants except .example)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Credentials (NEVER commit secrets)
 .veriflow/credentials/DEMO_CREDENTIALS.md

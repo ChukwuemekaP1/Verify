@@ -44,13 +44,26 @@ async function preprocessImage(buffer) {
   try {
     const meta = await sharp(buffer).metadata();
     let pipeline = sharp(buffer).rotate();
-    if (meta.width && meta.width > 2400) {
+
+    const width = meta.width || 0;
+    const density = meta.density || 0;
+
+    if (width > 0 && width < 1200) {
+      pipeline = pipeline.resize(2400, undefined, { withoutEnlargement: true });
+    } else if (width > 2400) {
       pipeline = pipeline.resize(2400, undefined, { withoutEnlargement: true });
     }
+
+    if (density > 0 && density < 150) {
+      pipeline = pipeline.resize({ width: Math.round(width * (300 / density)) });
+    }
+
     pipeline = pipeline
       .greyscale()
       .normalize()
-      .sharpen()
+      .blur(0.5)
+      .sharpen({ sigma: 1.5 })
+      .threshold(128)
       .png();
     return await pipeline.toBuffer();
   } catch (err) {
@@ -120,7 +133,13 @@ const PATTERNS = {
     /(?:certificate|cert|reg|registration)\s*(?:no|number|#|№)?[:\.\-\s]*([A-Za-z0-9\-\/]{4,50})/i,
     /certificate\s*no[:\.\-\s]*([A-Za-z0-9\-\/]{4,50})/i,
     /(?:serial|series)\s*(?:no|number)?[:\.\-\s]*([A-Za-z0-9\-\/]{4,50})/i,
+    /(?:SERT|CERT|UNN|UNIZIK|UNILAG)[\-\/]?\d{3,}[\-\/]?\d{0,10}[A-Za-z0-9\-]*/i,
     /([A-Z]{2,5}[\/\-]?\d{4,}[\/\-]?[A-Za-z0-9\-]{1,10})/,
+  ],
+  VERIFICATION_REFERENCE: [
+    /(?:verification|verify|verif|ref|reference|pin)\s*(?:no|number|#|reference)?[:\.\-\s]*([A-Za-z0-9\-]{6,50})/i,
+    /((?:UNN|UNIZIK|UNILAG|VRF|REF)[A-Z]?\-?\d{2,}[\-]?[A-Z0-9]{2,}[\-]?[A-Z0-9]{2,})/i,
+    /(V[A-Z0-9]{8,})/,
   ],
   MATRIC_NUMBER: [
     /(?:matric|matriculation|student|reg|registration)\s*(?:no|number|id)?[:\.\-\s]*([A-Za-z0-9\-\/]{4,40})/i,

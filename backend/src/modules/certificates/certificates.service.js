@@ -398,6 +398,35 @@ export class CertificatesService {
       throw AppError.notFound('Certificate not found');
     }
 
+    if (!published.verificationReference) {
+      const ref = published.generateVerificationReference();
+      published.verificationReference = ref;
+      await published.save();
+    }
+
+    try {
+      const { generateQrCodeFile } = await import('../../shared/services/qrcode.service.js');
+      const institution = published.institution && published.institution.name
+        ? published.institution
+        : await this.institutionsRepository.findById(published.institution);
+      const qr = await generateQrCodeFile(published.verificationReference, {
+        certificateNumber: published.certificateNumber,
+        institutionName: institution?.name,
+      });
+      if (qr) {
+        await this.certificatesRepository.update(certificateId, {
+          verificationQrCodeUrl: qr.qrCodeUrl,
+          verificationQrData: qr.qrPayload,
+          verificationUrl: qr.verificationUrl,
+        }, scope);
+        published.verificationQrCodeUrl = qr.qrCodeUrl;
+        published.verificationQrData = qr.qrPayload;
+        published.verificationUrl = qr.verificationUrl;
+      }
+    } catch (_qrErr) {
+      // QR generation failure is non-fatal
+    }
+
     return {
       certificate: sanitizeCertificate(published),
       previousStatus: existing.status,

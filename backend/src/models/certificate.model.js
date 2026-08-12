@@ -174,6 +174,18 @@ const certificateSchema = new mongoose.Schema(
     ocrReviewedAt: {
       type: Date,
     },
+    ocrRawText: {
+      type: String,
+    },
+    ocrExtractedFields: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+    ocrStatus: {
+      type: String,
+      enum: ['NONE', 'PROCESSING', 'COMPLETED', 'FAILED'],
+      default: 'NONE',
+    },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
       default: {},

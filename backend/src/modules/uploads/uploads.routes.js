@@ -52,6 +52,64 @@ uploadsRoutes.post(
 uploadsRoutes.use(authenticate, requireAnyAdmin);
 
 uploadsRoutes.post(
+  '/graduate/:graduateId/certificate',
+  uploadWithAuth,
+  asyncHandler(processUploadedFile),
+  asyncHandler(runOcrOnUpload),
+  asyncHandler(async (req, res) => {
+    const { graduateId } = req.params;
+    const ocr = req.ocr || {};
+    const payload = req.body || {};
+    const correctFields = payload.correctFields || {};
+
+    const cert = await createCertificateFromUpload({
+      uploadInfo: req.upload,
+      normalizedFields: ocr.normalized || {},
+      payload: {
+        ...payload,
+        publishNow: payload.publishNow !== undefined ? payload.publishNow : true,
+      },
+      correctFields,
+      graduateId,
+    }, req.user);
+
+    if (req.upload?.buffer && ocr.rawText) {
+      try {
+        const { Certificate } = await import('../../models/certificate.model.js');
+        await Certificate.findByIdAndUpdate(cert._id, {
+          ocrRawText: ocr.rawText,
+          ocrExtractedFields: ocr.extractedFields || {},
+          ocrStatus: 'COMPLETED',
+          ocrExtractionConfidence: ocr.overallConfidence || 0,
+        });
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    void AuditLogger.certificate(req, {
+      action: AUDIT_ACTION.CREATE,
+      entityId: cert._id,
+      entityLabel: cert.certificateNumber,
+      severity: AUDIT_SEVERITY.LOW,
+      newValues: { certificateNumber: cert.certificateNumber, graduate: graduateId },
+    });
+
+    const certObj = typeof cert.toObject === 'function' ? cert.toObject() : cert;
+    res.status(201).json({
+      status: 'success',
+      data: {
+        certificate: certObj,
+        upload: req.upload,
+        ocrSummary: ocr.overallConfidence !== undefined ? {
+          confidence: ocr.overallConfidence,
+          charCount: ocr.charCount,
+          wordCount: ocr.wordCount,
+        } : null,
+      },
+    });
+  }),
+);
+
+uploadsRoutes.post(
   '/certificate/ocr',
   uploadWithAuth,
   asyncHandler(processUploadedFile),
