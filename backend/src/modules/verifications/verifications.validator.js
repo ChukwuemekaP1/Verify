@@ -52,3 +52,11 @@ export const verifyByUploadSchema = z.object({
     institutionId: z.string().trim().optional(),
   }).passthrough(),
 });
+
+export const publicVerifySchema = z.object({
+  params: z.object({}).strict(),
+  query: z.object({}).strict(),
+  body: z.object({
+    identifier: z.string().trim().min(2, 'Identifier must be at least 2 characters'),
+  }),
+});

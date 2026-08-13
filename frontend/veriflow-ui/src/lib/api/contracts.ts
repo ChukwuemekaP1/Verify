@@ -519,6 +519,67 @@ export interface ReferenceLookupResponse {
   createdAt?: string;
 }
 
+export interface PublicVerifyResponse {
+  verified: boolean;
+  lookupMethod: 'VERIFICATION_REFERENCE' | 'CERTIFICATE_NUMBER' | 'REGISTRATION_NUMBER';
+  certificate: {
+    certificateNumber: string;
+    verificationReference: string | null;
+    type: CertificateType;
+    status: CertificateStatus;
+    awardTitle: string;
+    programme: string | null;
+    classification: string | null;
+    issueDate: string;
+    expiryDate: string | null;
+    documentUrl: string | null;
+    previewUrl: string | null;
+    verificationQrCodeUrl: string | null;
+    verificationUrl: string | null;
+    publishedAt: string | null;
+  };
+  graduate: {
+    fullName: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    middleName: string | null;
+    programme: string | null;
+    level: string | null;
+    graduationYear: string | null;
+    classification: string | null;
+    registrationNumber: string | null;
+  };
+  institution: {
+    name: string | null;
+    type: InstitutionType | null;
+    logoUrl: string | null;
+    country: string | null;
+    city: string | null;
+    website: string | null;
+    publicContactEmail: string | null;
+  };
+  verifiedAt: string;
+}
+
+export interface OcrVerifyResponse {
+  verified: boolean;
+  reason?: 'NO_TEXT' | 'NO_IDENTIFIER' | 'LOW_CONFIDENCE' | 'NOT_FOUND' | 'OCR_FAILED';
+  message?: string;
+  result?: PublicVerifyResponse;
+  identifier?: {
+    type: string;
+    value: string;
+    confidence: number;
+  };
+  ocrData?: {
+    overallConfidence: number;
+    charCount: number;
+    wordCount?: number;
+    rawTextPreview?: string;
+    error?: string;
+  };
+}
+
 export interface OcrUploadResponse {
   upload: {
     fileName: string;

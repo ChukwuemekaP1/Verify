@@ -14,11 +14,13 @@ import {
   verifyByNumberController,
   verifyByQrController,
   verifyByUploadController,
+  verifyPublicController,
 } from './verifications.controller.js';
 import {
   referenceLookupSchema,
   verificationDetailSchema,
   verifyByNumberSchema,
+  publicVerifySchema,
 } from './verifications.validator.js';
 import { uploadPublic, uploadQrScan, processUploadedFile } from '../uploads/uploads.service.js';
 import {
@@ -60,6 +62,12 @@ verificationsRoutes.post(
   asyncHandler(processUploadedFile),
   validate(verifyByQrSchema),
   asyncHandler(verifyByQrController),
+);
+
+verificationsRoutes.post(
+  '/public/verify',
+  validate(publicVerifySchema),
+  asyncHandler(verifyPublicController),
 );
 
 verificationsRoutes.use(authenticate, requireAnyAdmin);

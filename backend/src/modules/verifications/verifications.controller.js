@@ -10,6 +10,7 @@ import { validate } from '../../middlewares/validate.middleware.js';
 import { USER_ROLES } from '../../models/user.model.js';
 import { asyncHandler } from '../../shared/utils/async-handler.js';
 import { handleMulterError, uploadPublic, uploadQrScan, uploadWithAuth, processUploadedFile } from '../uploads/uploads.service.js';
+import { verifyCertificate, verifyFromQr } from '../../shared/services/certificate-verification.service.js';
 
 const verificationsService = new VerificationsService({
   verificationsRepository: new VerificationsRepository(),
@@ -87,5 +88,11 @@ export async function getGraduateVerificationHistoryController(req, res) {
 
 export async function getVerificationMetadataController(_req, res) {
   const result = await verificationsService.getMetadata();
+  res.status(200).json({ status: 'success', data: result });
+}
+
+export async function verifyPublicController(req, res) {
+  const { identifier } = req.body;
+  const result = await verifyCertificate(identifier);
   res.status(200).json({ status: 'success', data: result });
 }

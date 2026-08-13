@@ -23,7 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDateLong, formatDateTimeShort } from "@/lib/utils";
 
 import { api } from "@/lib/api";
-import type { ReferenceLookupResponse, VerificationStatus } from "@/lib/api/contracts";
+import type { PublicVerifyResponse, ReferenceLookupResponse, VerificationStatus } from "@/lib/api/contracts";
 
 export const Route = createFileRoute("/verify/result")({
   component: VerificationResultPage,
@@ -150,7 +150,7 @@ function statusToTone(status?: VerificationStatus | string | null): OutcomeTone 
 function VerificationResultPage() {
   const search = Route.useSearch();
   const loaderData = Route.useLoaderData();
-  const lookup: ReferenceLookupResponse | null = loaderData as ReferenceLookupResponse | null;
+  const lookup = loaderData as PublicVerifyResponse | ReferenceLookupResponse | null;
   const [manual, setManual] = useState<OutcomeTone | null>(null);
 
   useEffect(() => {
@@ -159,31 +159,54 @@ function VerificationResultPage() {
     }
   }, [search.ref]);
 
+  const isPublicVerify = lookup && "verifiedAt" in lookup && lookup.verified;
+  const isLegacyLookup = lookup && "lookedUpAt" in lookup;
+
   const toneKey: OutcomeTone = useMemo(() => {
     if (manual) return manual;
-    const certStatus =
-      lookup && typeof lookup.certificate === "object" && "status" in lookup.certificate
-        ? (lookup.certificate as { status?: string }).status
-        : undefined;
-    const isPublished = certStatus === "PUBLISHED";
-    if (!isPublished && lookup && lookup.status === "AUTHENTIC") {
-      return statusToTone(lookup.status);
+    if (!lookup) return search.ref ? "pending" : "not_found";
+
+    if (isPublicVerify) {
+      const pub = lookup as PublicVerifyResponse;
+      if (pub.verified && pub.certificate?.status === "PUBLISHED") return "authentic";
+      if (pub.certificate?.status === "REVOKED") return "invalid";
+      return "not_found";
     }
-    const status = lookup?.status ?? (isPublished ? "AUTHENTIC" : undefined);
-    return statusToTone(status ?? (search.ref ? "pending" : "not_found"));
-  }, [lookup, manual, search.ref]);
+
+    if (isLegacyLookup) {
+      const leg = lookup as ReferenceLookupResponse;
+      const certStatus = leg.certificate && "status" in leg.certificate ? leg.certificate.status : undefined;
+      if (certStatus === "PUBLISHED") return "authentic";
+      if (certStatus === "REVOKED") return "invalid";
+      if (leg.status) return statusToTone(leg.status);
+      return "not_found";
+    }
+
+    return "not_found";
+  }, [lookup, manual, search.ref, isPublicVerify, isLegacyLookup]);
 
   const tone = toneMap[toneKey];
   const Icon = tone.icon;
-  const confidence = lookup?.confidenceScore ?? null;
-  const verificationRef =
-    lookup?.verificationReference ?? (typeof lookup?.certificate === "object" &&
-    lookup.certificate &&
-    "verificationReference" in lookup.certificate
-      ? (lookup.certificate as { verificationReference?: string }).verificationReference
-      : search.ref);
 
-  const verifiedAt = lookup?.completedAt ?? lookup?.lookedUpAt ?? lookup?.createdAt;
+  const certificate = isPublicVerify
+    ? (lookup as PublicVerifyResponse).certificate
+    : (lookup as ReferenceLookupResponse)?.certificate;
+  const graduate = isPublicVerify
+    ? (lookup as PublicVerifyResponse).graduate
+    : (lookup as ReferenceLookupResponse)?.graduate;
+  const institution = isPublicVerify
+    ? (lookup as PublicVerifyResponse).institution
+    : (lookup as ReferenceLookupResponse)?.institution;
+
+  const confidence = isLegacyLookup ? (lookup as ReferenceLookupResponse).confidenceScore ?? null : (isPublicVerify ? 100 : null);
+  const verificationRef =
+    (certificate && "verificationReference" in certificate ? certificate.verificationReference : null) ??
+    (isLegacyLookup ? (lookup as ReferenceLookupResponse).verificationReference : null) ??
+    search.ref;
+
+  const verifiedAt = isPublicVerify
+    ? (lookup as PublicVerifyResponse).verifiedAt
+    : (isLegacyLookup ? ((lookup as ReferenceLookupResponse).completedAt ?? (lookup as ReferenceLookupResponse).lookedUpAt) : null);
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -260,61 +283,39 @@ function VerificationResultPage() {
               items={[
                 {
                   label: "Certificate number",
-                  value:
-                    (typeof lookup?.certificate === "object" && lookup.certificate
-                      ? (lookup.certificate as { certificateNumber?: string }).certificateNumber
-                      : undefined) ?? "—",
+                  value: certificate?.certificateNumber ?? "—",
                   mono: true,
                 },
                 {
                   label: "Graduate name",
-                  value: lookup?.graduate?.fullName
-                    ? `${lookup.graduate.firstName} ${lookup.graduate.middleName ?? ""} ${lookup.graduate.lastName}`.trim()
-                    : "—",
+                  value: graduate?.fullName ?? [graduate?.firstName, graduate?.middleName, graduate?.lastName].filter(Boolean).join(" ") ?? "—",
                 },
                 {
-                  label: "Matric number",
-                  value: lookup?.graduate?.matricNumber ?? "—",
+                  label: "Registration number",
+                  value: (isPublicVerify
+                    ? (graduate as PublicVerifyResponse["graduate"])?.registrationNumber
+                    : (graduate as ReferenceLookupResponse["graduate"])?.matricNumber) ?? "—",
                   mono: true,
                 },
                 {
                   label: "Programme",
-                  value: lookup?.graduate?.programme ?? "—",
+                  value: graduate?.programme ?? "—",
                 },
                 {
                   label: "Qualification level",
-                  value:
-                    (typeof lookup?.certificate === "object" && lookup.certificate
-                      ? (lookup.certificate as { type?: string }).type
-                      : undefined) ?? "—",
+                  value: certificate?.type ?? "—",
                 },
                 {
                   label: "Classification",
-                  value:
-                    (typeof lookup?.certificate === "object" && lookup.certificate
-                      ? (lookup.certificate as { classification?: string }).classification
-                      : undefined) ??
-                    lookup?.graduate?.programme?.includes("First")
-                      ? "First Class"
-                      : "—",
+                  value: certificate?.classification ?? (graduate as PublicVerifyResponse["graduate"])?.classification ?? "—",
                 },
                 {
                   label: "Issue date",
-                  value:
-                    (typeof lookup?.certificate === "object" && lookup.certificate
-                      ? (lookup.certificate as { issueDate?: string }).issueDate
-                      : undefined)
-                      ? formatDateLong(
-                          (lookup.certificate as { issueDate: string }).issueDate,
-                        )
-                      : "—",
+                  value: certificate?.issueDate ? formatDateLong(certificate.issueDate) : "—",
                 },
                 {
                   label: "Status",
-                  value:
-                    (typeof lookup?.certificate === "object" && lookup.certificate
-                      ? (lookup.certificate as { status?: string }).status
-                      : undefined) ?? "—",
+                  value: certificate?.status ?? "—",
                 },
               ]}
             />
@@ -323,23 +324,21 @@ function VerificationResultPage() {
           <SectionCard title="Institution information" description="Awarding body">
             <DetailList
               items={[
-                { label: "Institution", value: lookup?.institution?.name ?? "—" },
+                { label: "Institution", value: institution?.name ?? "—" },
                 {
-                  label: "Accreditation reference",
-                  value:
-                    (lookup?.institution as { verificationPrefix?: string } | undefined)
-                      ?.verificationPrefix ?? "—",
+                  label: "Verification prefix",
+                  value: (institution as { verificationPrefix?: string } | undefined)?.verificationPrefix ?? "—",
                   mono: true,
                 },
                 {
                   label: "Country / City",
-                  value: [lookup?.institution?.country, lookup?.institution?.city]
+                  value: [institution?.country, institution?.city]
                     .filter(Boolean)
                     .join(", ") || "—",
                 },
                 {
-                  label: "Institution status",
-                  value: lookup?.institution?.status ?? "—",
+                  label: "Website",
+                  value: institution?.website ?? "—",
                 },
               ]}
             />
@@ -362,22 +361,15 @@ function VerificationResultPage() {
                         ? "Document upload + OCR"
                         : search.method === "qr"
                           ? "QR code"
-                          : lookup?.lookupMethod === "CERTIFICATE_REFERENCE"
-                            ? "Direct certificate reference"
-                            : "Verification record reference",
+                          : isPublicVerify
+                            ? "Direct verification"
+                            : "Reference lookup",
                 },
                 { label: "Requested by", value: "Public" },
                 {
                   label: "Timestamp",
                   value: verifiedAt ? formatDateTimeShort(verifiedAt) : "—",
                   mono: true,
-                },
-                {
-                  label: "Previous verifications",
-                  value:
-                    lookup?.certificate && "verificationCount" in lookup.certificate
-                      ? String((lookup.certificate as { verificationCount?: number }).verificationCount ?? 0)
-                      : "—",
                 },
               ]}
             />

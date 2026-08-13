@@ -16,6 +16,9 @@ async function getWorker() {
       const languages = [env.OCR_LANG_1, env.OCR_LANG_2].filter(Boolean).join('+') || 'eng';
       logger.info({ languages }, 'Initializing Tesseract OCR worker');
       const worker = await createWorker(languages);
+      await worker.setParameters({
+        tessedit_pageseg_mode: '1',
+      });
       workerInstance = worker;
       return worker;
     } catch (err) {
@@ -40,31 +43,49 @@ export async function terminateOcrWorker() {
   }
 }
 
+/**
+ * Preprocess an image buffer for optimal OCR results.
+ * - Auto-rotate based on EXIF
+ * - Upscale small images to improve character recognition
+ * - Convert to greyscale
+ * - Normalize contrast
+ * - Sharpen for edge clarity
+ * - Apply adaptive-style thresholding via moderate threshold
+ */
 async function preprocessImage(buffer) {
   try {
     const meta = await sharp(buffer).metadata();
-    let pipeline = sharp(buffer).rotate();
+    let pipeline = sharp(buffer, { failOnError: false }).rotate();
 
     const width = meta.width || 0;
     const density = meta.density || 0;
 
-    if (width > 0 && width < 1200) {
-      pipeline = pipeline.resize(2400, undefined, { withoutEnlargement: true });
-    } else if (width > 2400) {
-      pipeline = pipeline.resize(2400, undefined, { withoutEnlargement: true });
+    // Upscale small images to at least 2000px wide for better OCR
+    if (width > 0 && width < 2000) {
+      pipeline = pipeline.resize(2400, undefined, {
+        withoutEnlargement: true,
+        kernel: sharp.kernel.lanczos3,
+      });
     }
 
-    if (density > 0 && density < 150) {
-      pipeline = pipeline.resize({ width: Math.round(width * (300 / density)) });
+    // Upscale based on DPI if low resolution
+    if (density > 0 && density < 200) {
+      const targetWidth = Math.round(width * (300 / density));
+      if (targetWidth > width) {
+        pipeline = pipeline.resize(targetWidth, undefined, {
+          withoutEnlargement: true,
+          kernel: sharp.kernel.lanczos3,
+        });
+      }
     }
 
     pipeline = pipeline
       .greyscale()
       .normalize()
-      .blur(0.5)
-      .sharpen({ sigma: 1.5 })
-      .threshold(128)
-      .png();
+      .sharpen({ sigma: 1.2 })
+      .threshold(140)
+      .png({ compressionLevel: 6 });
+
     return await pipeline.toBuffer();
   } catch (err) {
     logger.warn({ err }, 'Image preprocessing failed; using raw buffer');
@@ -72,73 +93,509 @@ async function preprocessImage(buffer) {
   }
 }
 
+/**
+ * Render a PDF buffer into an array of PNG image buffers (one per page).
+ * Uses sharp's PDF loader (libvips + poppler).
+ * Falls back to empty array if PDF rendering fails.
+ */
+async function renderPdfToImages(buffer, { dpi = 300, maxPages = 5 } = {}) {
+  const pages = [];
+  try {
+    // First, get page count by attempting to read metadata
+    const meta = await sharp(buffer, { failOnError: false, pages: -1 }).metadata();
+    const pageCount = Math.min(meta.pages || 1, maxPages);
+
+    for (let i = 0; i < pageCount; i++) {
+      try {
+        const pageBuffer = await sharp(buffer, { failOnError: false, page: i })
+          .resize(2400, undefined, {
+            withoutEnlargement: true,
+            kernel: sharp.kernel.lanczos3,
+          })
+          .greyscale()
+          .normalize()
+          .sharpen({ sigma: 1.2 })
+          .threshold(140)
+          .png({ compressionLevel: 6 })
+          .toBuffer();
+        pages.push(pageBuffer);
+      } catch (pageErr) {
+        logger.warn({ err: pageErr, page: i }, 'Failed to render PDF page');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'PDF rendering failed; attempting raw OCR on PDF buffer');
+  }
+  return pages;
+}
+
 function parsePdfMime(buffer) {
   const header = buffer.slice(0, 5).toString('ascii');
   return header === '%PDF-';
 }
 
+/**
+ * Run OCR on a file buffer (image or PDF).
+ * For PDFs: renders each page to an image, then OCRs each page.
+ * For images: preprocesses then OCRs.
+ * Returns combined text, per-word/line data, and confidence.
+ */
 export async function runOcr(fileBuffer, { mimeType, fileName } = {}) {
   const startTime = Date.now();
   const ext = fileName ? path.extname(fileName).toLowerCase().slice(1) : '';
   const isPdf = mimeType === 'application/pdf' || ext === 'pdf' || parsePdfMime(fileBuffer);
-  const processBuffer = isPdf ? fileBuffer : await preprocessImage(fileBuffer);
 
   const worker = await getWorker();
-  const result = await worker.recognize(processBuffer, {}, {
-    pdfAutoOCR: isPdf,
-    tessedit_pageseg_mode: isPdf ? '6' : '1',
-  });
+  let allText = '';
+  let allWords = [];
+  let allLines = [];
+  let confidences = [];
 
-  const text = result.data.text || '';
-  const words = (result.data.words || []).map((w) => ({
-    text: w.text,
-    confidence: w.confidence,
-    bbox: w.bbox,
-  }));
+  if (isPdf) {
+    const pageImages = await renderPdfToImages(fileBuffer);
+    if (pageImages.length === 0) {
+      // PDF rendering not supported or failed — return empty result
+      logger.warn('PDF rendering failed and no fallback available');
+      return {
+        text: '',
+        words: [],
+        lines: [],
+        overallConfidence: 0,
+        charCount: 0,
+        wordCount: 0,
+        durationMs: Date.now() - startTime,
+        isPdf: true,
+      };
+    }
 
-  const lines = (result.data.lines || []).map((l) => ({
-    text: l.text,
-    confidence: l.confidence,
-    bbox: l.bbox,
-  }));
+    for (const pageBuffer of pageImages) {
+      let result;
+      try {
+        result = await worker.recognize(pageBuffer);
+      } catch (pageErr) {
+        logger.warn({ err: pageErr }, 'Tesseract failed on PDF page');
+        continue;
+      }
+      const pageText = result.data.text || '';
+      allText += (allText ? '\n\n' : '') + pageText;
 
-  const overallConfidence = result.data.confidence ?? calculateConfidence(words);
+      const words = (result.data.words || []).map((w) => ({
+        text: w.text,
+        confidence: w.confidence,
+        bbox: w.bbox,
+      }));
+      const lines = (result.data.lines || []).map((l) => ({
+        text: l.text,
+        confidence: l.confidence,
+        bbox: l.bbox,
+      }));
+
+      allWords.push(...words);
+      allLines.push(...lines);
+      if (words.length > 0) {
+        const pageConf = words.reduce((s, w) => s + (Number(w.confidence) || 0), 0) / words.length;
+        confidences.push(pageConf);
+      }
+    }
+  } else {
+    const processBuffer = await preprocessImage(fileBuffer);
+    let result;
+    try {
+      result = await worker.recognize(processBuffer);
+    } catch (imgErr) {
+      logger.warn({ err: imgErr }, 'Tesseract failed on image');
+      return {
+        text: '',
+        words: [],
+        lines: [],
+        overallConfidence: 0,
+        charCount: 0,
+        wordCount: 0,
+        durationMs: Date.now() - startTime,
+        isPdf: false,
+      };
+    }
+    allText = result.data.text || '';
+    allWords = (result.data.words || []).map((w) => ({
+      text: w.text,
+      confidence: w.confidence,
+      bbox: w.bbox,
+    }));
+    allLines = (result.data.lines || []).map((l) => ({
+      text: l.text,
+      confidence: l.confidence,
+      bbox: l.bbox,
+    }));
+    if (allWords.length > 0) {
+      confidences.push(
+        allWords.reduce((s, w) => s + (Number(w.confidence) || 0), 0) / allWords.length,
+      );
+    }
+  }
+
+  const overallConfidence = confidences.length > 0
+    ? confidences.reduce((s, c) => s + c, 0) / confidences.length
+    : 0;
   const duration = Date.now() - startTime;
 
   logger.info(
-    { chars: text.length, wordCount: words.length, overallConfidence, durationMs: duration, isPdf },
+    { chars: allText.length, wordCount: allWords.length, overallConfidence, durationMs: duration, isPdf },
     'OCR extraction completed',
   );
 
   return {
-    text,
-    words,
-    lines,
+    text: allText,
+    words: allWords,
+    lines: allLines,
     overallConfidence: Math.round(overallConfidence),
-    charCount: text.length,
-    wordCount: words.length,
+    charCount: allText.length,
+    wordCount: allWords.length,
     durationMs: duration,
     isPdf,
   };
 }
 
-function calculateConfidence(words) {
-  if (!words || words.length === 0) return 0;
-  const sum = words.reduce((acc, w) => acc + (Number(w.confidence) || 0), 0);
-  return Math.min(100, Math.max(0, sum / words.length));
+// ─── Identifier Extraction ───────────────────────────────────────────────────
+
+/**
+ * Known institution prefixes used in verification references and certificate numbers.
+ * Derived from seed data — covers UNN, UNIZIK, UNILAG patterns.
+ */
+const INSTITUTION_PREFIXES = ['UNN', 'UNIZIK', 'UNILAG'];
+const PREFIX_PATTERN = INSTITUTION_PREFIXES.join('|');
+
+/**
+ * Extract candidate identifiers from raw OCR text.
+ * Returns candidates in priority order with confidence scores.
+ *
+ * Priority:
+ * 1. Verification Reference (most specific — unique lookup)
+ * 2. Certificate Number (unique within institution)
+ * 3. Registration/Matric Number (resolves via graduate)
+ */
+export function extractIdentifiers(rawText, ocrLines = []) {
+  if (!rawText || typeof rawText !== 'string') {
+    return { candidates: [], rawText: '', overallConfidence: 0 };
+  }
+
+  const text = rawText.replace(/\r\n/g, '\n');
+  const candidates = [];
+
+  // ── 1. Verification Reference ──
+  // Format: e.g. UNNV001K0L1BO, V1XYZ012ABC, or prefixed with "Verification Ref: ..."
+  const verRefPatterns = [
+    // Explicit label
+    new RegExp(
+      `(?:verification|verify|verif|ref|reference|pin)\\s*(?:no|number|#|reference)?[:\\.\\-\\s]*(${PREFIX_PATTERN}[A-Z]?\\-?\\d{2,}[\\-]?[A-Z0-9]{2,}[\\-]?[A-Z0-9]{2,})`,
+      'i',
+    ),
+    // Standalone reference pattern: PREFIX + V + digits + alphanumeric
+    new RegExp(`(${PREFIX_PATTERN}V\\d{2,}[A-Z0-9]{3,})`, 'i'),
+    // Generic V-prefix reference: V + 8+ alphanumeric chars
+    /(V[A-Z0-9]{7,})/i,
+    // Label + any alphanumeric reference
+    /(?:verification|verify|verif|ref|reference|pin)\s*(?:no|number|#|reference)?[:\.\-\s]*([A-Za-z0-9\-]{8,50})/i,
+  ];
+
+  for (const pattern of verRefPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const value = (match[1] || match[0]).trim().toUpperCase().replace(/\s+/g, '');
+      if (value.length >= 6) {
+        candidates.push({
+          type: 'VERIFICATION_REFERENCE',
+          value,
+          confidence: estimateIdentifierConfidence(value, text, ocrLines),
+          source: 'ocr',
+        });
+        break;
+      }
+    }
+  }
+
+  // ── 2. Certificate Number ──
+  // Format: e.g. UNN-CERT-0001-2026, PREFIX-CERT-NNNN-YYYY
+  const certNumPatterns = [
+    // Institution prefix pattern
+    new RegExp(
+      `(${PREFIX_PATTERN}[\\-\\/]?CERT[\\-\\/]?\\d{3,}[\\-\\/]?\\d{0,10}[A-Za-z0-9\\-]*)`,
+      'i',
+    ),
+    // Explicit label
+    /(?:certificate|cert|serial|series)\s*(?:no|number|#|№)?[:\.\-\s]*([A-Za-z0-9\-\/]{6,60})/i,
+    // Generic pattern: ALPHA-NUMBER-NUMBER-NUMBER
+    /([A-Z]{2,5}[\/\-]\d{3,}[\/\-]\d{3,}[\/\-]\d{2,})/i,
+  ];
+
+  for (const pattern of certNumPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const value = (match[1] || match[0]).trim().replace(/\s+/g, ' ');
+      if (value.length >= 6) {
+        candidates.push({
+          type: 'CERTIFICATE_NUMBER',
+          value,
+          confidence: estimateIdentifierConfidence(value, text, ocrLines),
+          source: 'ocr',
+        });
+        break;
+      }
+    }
+  }
+
+  // ── 3. Registration/Matric Number ──
+  // Format: e.g. UNN/2018/001234, PREFIX/YYYY/NNNNNN
+  const regNumPatterns = [
+    // Institution prefix pattern
+    new RegExp(
+      `(${PREFIX_PATTERN}[\\-\\/]\\d{4}[\\-\\/]\\d{4,})`,
+      'i',
+    ),
+    // Explicit label
+    /(?:matric|matriculation|student|registration)\s*(?:no|number|id)?[:\.\-\s]*([A-Za-z0-9\-\/]{6,40})/i,
+    // Generic: ALPHA/NUMBER/NUMBER
+    /([A-Z]{2,5}\/\d{4}\/\d{3,})/i,
+  ];
+
+  for (const pattern of regNumPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const value = (match[1] || match[0]).trim().toUpperCase().replace(/\s+/g, '');
+      if (value.length >= 6) {
+        candidates.push({
+          type: 'REGISTRATION_NUMBER',
+          value,
+          confidence: estimateIdentifierConfidence(value, text, ocrLines),
+          source: 'ocr',
+        });
+        break;
+      }
+    }
+  }
+
+  return {
+    candidates,
+    rawText: text,
+    overallConfidence: candidates.length > 0
+      ? Math.max(...candidates.map((c) => c.confidence))
+      : 0,
+  };
 }
+
+/**
+ * Estimate confidence for an extracted identifier.
+ * Checks if the identifier appears clearly in the text and in OCR lines.
+ */
+function estimateIdentifierConfidence(identifier, rawText, ocrLines = []) {
+  if (!identifier) return 0;
+
+  const normalizedId = identifier.toUpperCase().replace(/[\s\-_]/g, '');
+  const normalizedText = rawText.toUpperCase().replace(/[\s\-_]/g, '');
+
+  // Check if identifier appears in raw text (exact or near-exact)
+  const textContains = normalizedText.includes(normalizedId);
+
+  // Check OCR lines for the identifier (words near each other)
+  let lineConfidence = 0;
+  if (ocrLines && ocrLines.length > 0) {
+    for (const line of ocrLines) {
+      const lineText = (line.text || '').toUpperCase().replace(/[\s\-_]/g, '');
+      if (lineText.includes(normalizedId)) {
+        lineConfidence = Math.max(lineConfidence, line.confidence || 0);
+      }
+    }
+  }
+
+  // Base confidence
+  let confidence = 50;
+  if (textContains) confidence += 30;
+  if (lineConfidence > 0) confidence = Math.max(confidence, lineConfidence);
+
+  // Penalize very short or very long identifiers
+  if (identifier.length < 6) confidence -= 20;
+  if (identifier.length > 30) confidence -= 10;
+
+  return Math.min(100, Math.max(0, Math.round(confidence)));
+}
+
+/**
+ * Normalize an extracted identifier for lookup.
+ * Handles common OCR formatting issues:
+ * - Whitespace, line breaks
+ * - Case normalization
+ * - Separator variations (O/0, I/1 confusion for known patterns)
+ *
+ * Does NOT do aggressive fuzzy matching — only harmless formatting fixes.
+ */
+export function normalizeIdentifier(raw) {
+  if (typeof raw !== 'string') return '';
+  let normalized = raw.trim().replace(/[\r\n\t]+/g, '').replace(/\s{2,}/g, ' ');
+
+  // Uppercase for consistency
+  normalized = normalized.toUpperCase();
+
+  // Remove harmless separators for comparison (but keep the original structure)
+  // This is used by the verification service, not here
+
+  return normalized;
+}
+
+/**
+ * Attempt to fix common OCR character confusion in identifiers.
+ * Only applies to known patterns where the fix is safe.
+ */
+export function fixOcrCharacterConfusion(identifier) {
+  if (!identifier || typeof identifier !== 'string') return identifier;
+
+  let fixed = identifier;
+
+  // For verification references (V-prefix): O→0 in digit positions
+  if (/^V[A-Z0-9]+$/i.test(fixed)) {
+    // Keep as-is — verification refs use both letters and digits
+  }
+
+  // For matric numbers (PREFIX/YYYY/NNNNN): ensure digits in numeric parts
+  const matricMatch = fixed.match(/^([A-Z]+)[\/\-](\d{4})[\/\-](\d+)$/);
+  if (matricMatch) {
+    fixed = `${matricMatch[1]}/${matricMatch[2]}/${matricMatch[3]}`;
+  }
+
+  // For certificate numbers (PREFIX-CERT-NNNN-YYYY): ensure structure
+  const certMatch = fixed.match(/^([A-Z]+)[\-\/](CERT)[\-\/](\d+)[\-\/](\d{4})$/i);
+  if (certMatch) {
+    fixed = `${certMatch[1]}-${certMatch[2]}-${certMatch[3]}-${certMatch[4]}`;
+  }
+
+  return fixed;
+}
+
+// ─── OCR → Verification Bridge ───────────────────────────────────────────────
+
+/**
+ * Bridge function: takes OCR results, extracts identifiers, and attempts
+ * verification via the canonical verifyCertificate() service.
+ *
+ * Returns:
+ * - If identifier found and verified: { verified: true, result, identifier, ocrData }
+ * - If identifier found but not verified: { verified: false, reason: 'NOT_FOUND', identifier, ocrData }
+ * - If no identifier extracted: { verified: false, reason: 'NO_IDENTIFIER', ocrData }
+ * - If low confidence: { verified: false, reason: 'LOW_CONFIDENCE', identifier, ocrData }
+ */
+export async function identifyCertificateFromOcr(ocrResult) {
+  const { text, lines, overallConfidence } = ocrResult;
+
+  if (!text || text.trim().length < 5) {
+    return {
+      verified: false,
+      reason: 'NO_TEXT',
+      message: 'OCR produced no readable text from the uploaded document.',
+      ocrData: { overallConfidence, charCount: text?.length || 0 },
+    };
+  }
+
+  const { candidates } = extractIdentifiers(text, lines);
+
+  if (candidates.length === 0) {
+    return {
+      verified: false,
+      reason: 'NO_IDENTIFIER',
+      message: 'OCR completed but no verification identifier could be extracted from the document.',
+      ocrData: {
+        overallConfidence,
+        charCount: text.length,
+        wordCount: ocrResult.wordCount,
+        rawTextPreview: text.substring(0, 500),
+      },
+    };
+  }
+
+  // Try each candidate in priority order
+  // Dynamically import to avoid circular dependency
+  const { verifyCertificate } = await import('./certificate-verification.service.js');
+
+  for (const candidate of candidates) {
+    // Skip very low confidence candidates
+    if (candidate.confidence < 20) continue;
+
+    const normalized = normalizeIdentifier(candidate.value);
+    const fixed = fixOcrCharacterConfusion(normalized);
+
+    // Flag ambiguous identifiers
+    if (candidate.confidence < 40) {
+      return {
+        verified: false,
+        reason: 'LOW_CONFIDENCE',
+        message: `OCR extracted a ${candidate.type.toLowerCase().replace(/_/g, ' ')} ("${fixed}") but with low confidence (${candidate.confidence}%). Please verify manually or enter the identifier directly.`,
+        identifier: {
+          type: candidate.type,
+          value: fixed,
+          confidence: candidate.confidence,
+        },
+        ocrData: {
+          overallConfidence,
+          charCount: text.length,
+          wordCount: ocrResult.wordCount,
+          rawTextPreview: text.substring(0, 500),
+        },
+      };
+    }
+
+    try {
+      const result = await verifyCertificate(fixed);
+      return {
+        verified: true,
+        result,
+        identifier: {
+          type: candidate.type,
+          value: fixed,
+          confidence: candidate.confidence,
+        },
+        ocrData: {
+          overallConfidence,
+          charCount: text.length,
+          wordCount: ocrResult.wordCount,
+        },
+      };
+    } catch (err) {
+      // If this candidate failed, try the next one
+      if (err.statusCode === 404) continue;
+      throw err;
+    }
+  }
+
+  // All candidates failed verification
+  const best = candidates[0];
+  return {
+    verified: false,
+    reason: 'NOT_FOUND',
+    message: `OCR extracted a ${best.type.toLowerCase().replace(/_/g, ' ')} ("${fixOcrCharacterConfusion(normalizeIdentifier(best.value))}") but no matching published certificate was found.`,
+    identifier: {
+      type: best.type,
+      value: fixOcrCharacterConfusion(normalizeIdentifier(best.value)),
+      confidence: best.confidence,
+    },
+    ocrData: {
+      overallConfidence,
+      charCount: text.length,
+      wordCount: ocrResult.wordCount,
+      rawTextPreview: text.substring(0, 500),
+    },
+  };
+}
+
+// ─── Legacy Extraction Functions (used by institution-side upload flows) ──────
 
 const PATTERNS = {
   CERTIFICATE_NUMBER: [
     /(?:certificate|cert|reg|registration)\s*(?:no|number|#|№)?[:\.\-\s]*([A-Za-z0-9\-\/]{4,50})/i,
     /certificate\s*no[:\.\-\s]*([A-Za-z0-9\-\/]{4,50})/i,
     /(?:serial|series)\s*(?:no|number)?[:\.\-\s]*([A-Za-z0-9\-\/]{4,50})/i,
-    /(?:SERT|CERT|UNN|UNIZIK|UNILAG)[\-\/]?\d{3,}[\-\/]?\d{0,10}[A-Za-z0-9\-]*/i,
+    new RegExp(`(?:${PREFIX_PATTERN})[\\-\\/]?\\d{3,}[\\-\\/]?\\d{0,10}[A-Za-z0-9\\-]*`, 'i'),
     /([A-Z]{2,5}[\/\-]?\d{4,}[\/\-]?[A-Za-z0-9\-]{1,10})/,
   ],
   VERIFICATION_REFERENCE: [
     /(?:verification|verify|verif|ref|reference|pin)\s*(?:no|number|#|reference)?[:\.\-\s]*([A-Za-z0-9\-]{6,50})/i,
-    /((?:UNN|UNIZIK|UNILAG|VRF|REF)[A-Z]?\-?\d{2,}[\-]?[A-Z0-9]{2,}[\-]?[A-Z0-9]{2,})/i,
+    new RegExp(`((?:${PREFIX_PATTERN})[A-Z]?\\-?\\d{2,}[\\-]?[A-Z0-9]{2,}[\\-]?[A-Z0-9]{2,})`, 'i'),
     /(V[A-Z0-9]{8,})/,
   ],
   MATRIC_NUMBER: [

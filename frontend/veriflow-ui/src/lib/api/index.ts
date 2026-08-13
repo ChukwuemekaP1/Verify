@@ -35,6 +35,8 @@ import type {
   OcrUploadResponse,
   PaginatedResponse,
   PublicStatistics,
+  PublicVerifyResponse,
+  OcrVerifyResponse,
   PublishCertificateResponse,
   ReferenceLookupResponse,
   ResetPasswordResponse,
@@ -345,7 +347,7 @@ export const api = {
       programme?: string;
     }) => httpClient.post<VerificationResult>(apiEndpoints.verifications.verifyByNumber, payload),
     verifyByUpload: (file: File, extraFields?: { surname?: string; matricNumber?: string; institutionId?: string }) =>
-      httpClient.upload<VerificationResult>(apiEndpoints.verifications.verifyByUpload, file, extraFields),
+      httpClient.upload<OcrVerifyResponse>(apiEndpoints.verifications.verifyByUpload, file, extraFields),
     verifyByQr: (payload: { qrData?: string; reference?: string; fileName?: string }, file?: File) => {
       if (file) {
         return httpClient.upload<VerificationResult>(
@@ -356,6 +358,8 @@ export const api = {
       }
       return httpClient.post<VerificationResult>(apiEndpoints.verifications.verifyByQr, payload);
     },
+    verifyPublic: (identifier: string) =>
+      httpClient.post<PublicVerifyResponse>(apiEndpoints.verifications.verifyPublic, { identifier }),
     metadata: () =>
       httpClient.get<VerificationMetadataResponse>(apiEndpoints.verifications.metadata),
     manual: (

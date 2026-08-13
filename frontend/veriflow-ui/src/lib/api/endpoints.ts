@@ -50,6 +50,7 @@ export const apiEndpoints = {
     verifyByNumber: '/verifications/public/number',
     verifyByUpload: '/verifications/public/upload',
     verifyByQr: '/verifications/public/qr',
+    verifyPublic: '/verifications/public/verify',
     manual: (verificationId: string) => `/verifications/${verificationId}/manual`,
     byCertificate: (certificateId: string) => `/verifications/certificate/${certificateId}`,
     byGraduate: (graduateId: string) => `/verifications/graduate/${graduateId}`,

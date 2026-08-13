@@ -63,14 +63,9 @@ function PublicVerifyPage() {
     setNumberLoading(true);
     setNumberError(null);
     try {
-      const result = await api.verifications.verifyByNumber({
-        certificateNumber,
-        surname: surname || undefined,
-        matricNumber: matricNumber || undefined,
-      });
+      const result = await api.verifications.verifyPublic(certificateNumber);
       const ref =
-        result?.data?.verification?.verificationReference ??
-        result?.verification?.verificationReference;
+        result?.data?.certificate?.verificationReference;
       if (!ref) {
         setNumberError("Verification returned no reference. Try again.");
         return;
@@ -101,17 +96,17 @@ function PublicVerifyPage() {
         surname: surname || undefined,
         matricNumber: matricNumber || undefined,
       });
-      const ref =
-        result?.data?.verification?.verificationReference ??
-        result?.verification?.verificationReference;
-      if (!ref) {
-        setUploadError("Verification returned no reference. Try again.");
-        return;
+      const data = result?.data;
+      if (data?.verified && data.result?.certificate?.verificationReference) {
+        await router.navigate({
+          to: "/verify/result",
+          search: { ref: data.result.certificate.verificationReference, method: "upload" },
+        });
+      } else {
+        const msg = data?.message || "Could not extract a verification identifier from this document. Try entering the reference or certificate number directly.";
+        setUploadError(msg);
+        toast.error(msg);
       }
-      await router.navigate({
-        to: "/verify/result",
-        search: { ref, method: "upload" },
-      });
     } catch (err) {
       const msg = (err as ApiError).message || "Verification failed. Please try again.";
       setUploadError(msg);
@@ -130,13 +125,15 @@ function PublicVerifyPage() {
     setQrLoading(true);
     setQrError(null);
     try {
-      const result = await api.verifications.verifyByQr(
-        { reference: qrReference.trim() || undefined, fileName: qrFile?.name },
-        qrFile || undefined,
-      );
+      const identifier = qrReference.trim();
+      if (!identifier) {
+        setQrError("Enter a verification reference to verify.");
+        setQrLoading(false);
+        return;
+      }
+      const result = await api.verifications.verifyPublic(identifier);
       const ref =
-        result?.data?.verification?.verificationReference ??
-        result?.verification?.verificationReference;
+        result?.data?.certificate?.verificationReference;
       if (!ref) {
         setQrError("Verification returned no reference. Try again.");
         return;

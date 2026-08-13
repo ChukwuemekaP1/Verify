@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Agent(Explore)",
+      "Bash(npm run *)",
+      "Bash(wc *)",
+      "Bash(stat *)",
+      "Bash(node *)",
+      "Bash(curl *)",
+      "Bash(python3 *)",
+      "Bash(echo *)",
+      "Bash(\\\"verificationreference\\\",\\\"?\\\")",
+      "Bash(\\\"status\\\",\\\"?\\\")",
+      "Bash(}')\n\"\n\n# test: tenant isolation - unizik admin can't *)"
+    ]
+  },
+  "$version": 4
+}
