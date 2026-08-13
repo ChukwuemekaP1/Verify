@@ -56,13 +56,53 @@ export class VerificationsService {
     if (!result) throw AppError.notFound('Verification not found');
     return { verification: result };
   }
+  async _recordVerificationEvent({ method, status, certificate, graduate, institution, identifier, identifierType, req }) {
+    try {
+      const record = await this.verificationsRepository.create({
+        method,
+        status,
+        certificate: certificate || null,
+        graduate: graduate || null,
+        institution: institution || null,
+        requestedFields: { identifier, identifierType },
+        verifierIp: req?.ip || req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || null,
+        verifierUserAgent: req?.headers?.['user-agent'] || null,
+      });
+      await this.verificationsRepository.markCompleted(record._id, {
+        status,
+        certificate: certificate || null,
+        graduate: graduate || null,
+        institution: institution || null,
+        confidenceScore: status === 'AUTHENTIC' ? 100 : 0,
+        completedAt: new Date(),
+      });
+      return record;
+    } catch (err) {
+      logger.warn({ err }, 'Failed to record verification event');
+      return null;
+    }
+  }
 
-  async lookupByReference(reference) {
+  async lookupByReference(reference, req) {
     const result = await verifyCertificate(reference);
     try {
-      await certificatesRepository.incrementVerificationCount(
-        (await Certificate.findOne({ verificationReference: (reference || '').trim().toUpperCase() }).select('_id').lean())?._id,
-      );
+      const cert = await Certificate.findOne({ verificationReference: (reference || '').trim().toUpperCase() })
+        .populate('graduate', '_id')
+        .populate('institution', '_id')
+        .lean();
+      if (cert?._id) {
+        await certificatesRepository.incrementVerificationCount(cert._id);
+        await this._recordVerificationEvent({
+          method: 'REFERENCE',
+          status: 'AUTHENTIC',
+          certificate: cert._id,
+          graduate: cert.graduate?._id || null,
+          institution: cert.institution?._id || null,
+          identifier: reference,
+          identifierType: 'VERIFICATION_REFERENCE',
+          req,
+        });
+      }
     } catch (_err) { /* non-fatal */ }
     return result;
   }
@@ -74,8 +114,23 @@ export class VerificationsService {
     try {
       const cert = await Certificate.findOne({
         certificateNumber: certificateNumber.trim().toUpperCase(),
-      }).select('_id').lean();
-      if (cert?._id) await certificatesRepository.incrementVerificationCount(cert._id);
+      })
+        .populate('graduate', '_id')
+        .populate('institution', '_id')
+        .lean();
+      if (cert?._id) {
+        await certificatesRepository.incrementVerificationCount(cert._id);
+        await this._recordVerificationEvent({
+          method: 'CERTIFICATE_NUMBER',
+          status: 'AUTHENTIC',
+          certificate: cert._id,
+          graduate: cert.graduate?._id || null,
+          institution: cert.institution?._id || null,
+          identifier: certificateNumber,
+          identifierType: 'CERTIFICATE_NUMBER',
+          req,
+        });
+      }
     } catch (_err) { /* non-fatal */ }
 
     return result;
@@ -106,13 +161,28 @@ export class VerificationsService {
     const { identifyCertificateFromOcr } = await import('../../shared/services/ocr.service.js');
     const result = await identifyCertificateFromOcr(ocrResult);
 
-    // Increment verification count on success
+    // Increment verification count and record event on success
     if (result.verified && result.result?.certificate?.verificationReference) {
       try {
         const cert = await Certificate.findOne({
           verificationReference: result.result.certificate.verificationReference,
-        }).select('_id').lean();
-        if (cert?._id) await certificatesRepository.incrementVerificationCount(cert._id);
+        })
+          .populate('graduate', '_id')
+          .populate('institution', '_id')
+          .lean();
+        if (cert?._id) {
+          await certificatesRepository.incrementVerificationCount(cert._id);
+          await this._recordVerificationEvent({
+            method: 'DOCUMENT_UPLOAD',
+            status: 'AUTHENTIC',
+            certificate: cert._id,
+            graduate: cert.graduate?._id || null,
+            institution: cert.institution?._id || null,
+            identifier: result.identifier?.value || null,
+            identifierType: result.identifier?.type || 'OCR_EXTRACTED',
+            req: _req,
+          });
+        }
       } catch (_err) { /* non-fatal */ }
     }
 
@@ -132,8 +202,23 @@ export class VerificationsService {
     try {
       const cert = await Certificate.findOne({
         verificationReference: result.certificate?.verificationReference,
-      }).select('_id').lean();
-      if (cert?._id) await certificatesRepository.incrementVerificationCount(cert._id);
+      })
+        .populate('graduate', '_id')
+        .populate('institution', '_id')
+        .lean();
+      if (cert?._id) {
+        await certificatesRepository.incrementVerificationCount(cert._id);
+        await this._recordVerificationEvent({
+          method: 'QR_CODE',
+          status: 'AUTHENTIC',
+          certificate: cert._id,
+          graduate: cert.graduate?._id || null,
+          institution: cert.institution?._id || null,
+          identifier: identifier,
+          identifierType: 'QR_CODE',
+          req: _req,
+        });
+      }
     } catch (_err) { /* non-fatal */ }
 
     return result;

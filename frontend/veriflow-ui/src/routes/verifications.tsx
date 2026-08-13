@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { BadgeCheck, ShieldAlert, ShieldX, TrendingUp } from "lucide-react";
+import { BadgeCheck, ShieldAlert, ShieldX, TrendingUp, SearchX } from "lucide-react";
 
 import { DataTable } from "@/components/common/data-table";
 import { FilterBar } from "@/components/common/filter-bar";
@@ -48,24 +48,51 @@ function outcomeTone(status: string) {
   if (status === "AUTHENTIC") return "success";
   if (status === "SUSPICIOUS") return "warning";
   if (status === "PENDING" || status === "IN_PROGRESS") return "neutral";
-  return "danger";
+  if (status === "NOT_FOUND") return "info";
+  if (status === "INVALID" || status === "ERROR") return "danger";
+  return "neutral";
+}
+
+function outcomeLabel(status: string) {
+  switch (status) {
+    case "AUTHENTIC": return "Verified";
+    case "SUSPICIOUS": return "Suspicious";
+    case "NOT_FOUND": return "Not found";
+    case "INVALID": return "Invalid";
+    case "ERROR": return "Error";
+    case "PENDING": return "Pending";
+    case "IN_PROGRESS": return "In progress";
+    default: return status;
+  }
+}
+
+function methodLabel(method: string) {
+  switch (method) {
+    case "REFERENCE": return "Reference";
+    case "CERTIFICATE_NUMBER": return "Cert. number";
+    case "DOCUMENT_UPLOAD": return "Upload";
+    case "QR_CODE": return "QR code";
+    case "MANUAL": return "Manual";
+    default: return method;
+  }
 }
 
 function VerificationHistoryPage() {
   const loaderData = Route.useLoaderData();
   const items = loaderData?.items ?? [];
-  const pageCount = Math.max(1, loaderData?.totalPages ?? 1);
+  const pageCount = Math.max(1, loaderData?.pageCount ?? 1);
   const total = loaderData?.total ?? items.length;
 
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
 
   const counts = useMemo(() => {
-    const base = { authentic: 0, suspicious: 0, invalid: 0 };
+    const base = { authentic: 0, suspicious: 0, notFound: 0, invalid: 0 };
     for (const v of items) {
       if (v.status === "AUTHENTIC") base.authentic += 1;
       else if (v.status === "SUSPICIOUS") base.suspicious += 1;
-      else if (v.status === "INVALID" || v.status === "NOT_FOUND" || v.status === "ERROR") base.invalid += 1;
+      else if (v.status === "NOT_FOUND") base.notFound += 1;
+      else if (v.status === "INVALID" || v.status === "ERROR") base.invalid += 1;
     }
     return base;
   }, [items]);
@@ -81,9 +108,9 @@ function VerificationHistoryPage() {
 
         <Grid cols={4}>
           <StatCard label="Total requests" icon={TrendingUp} hint="All time" value={total || undefined} />
-          <StatCard label="Authentic" icon={BadgeCheck} hint="Confirmed matches" value={counts.authentic || undefined} />
-          <StatCard label="Suspicious" icon={ShieldAlert} hint="Flagged for review" value={counts.suspicious || undefined} />
-          <StatCard label="Invalid" icon={ShieldX} hint="No matching record" value={counts.invalid || undefined} />
+          <StatCard label="Verified" icon={BadgeCheck} hint="Confirmed matches" value={counts.authentic || undefined} />
+          <StatCard label="Not found" icon={SearchX} hint="No matching record" value={counts.notFound || undefined} />
+          <StatCard label="Suspicious / Invalid" icon={ShieldX} hint="Flagged or failed" value={(counts.suspicious + counts.invalid) || undefined} />
         </Grid>
 
         <DataTable
@@ -158,10 +185,10 @@ function VerificationHistoryPage() {
                 <TableCell className="font-mono text-xs">{v.verificationReference}</TableCell>
                 <TableCell className="font-mono text-xs">{certNo}</TableCell>
                 <TableCell className="max-w-[20ch] truncate text-sm">{gradName}</TableCell>
-                <TableCell className="text-xs uppercase tracking-wide text-muted-foreground">{v.method}</TableCell>
+                <TableCell className="text-xs uppercase tracking-wide text-muted-foreground">{methodLabel(v.method)}</TableCell>
                 <TableCell>
-                  <Badge variant={outcomeTone(v.status) as "success" | "warning" | "danger" | "neutral"}>
-                    {v.status}
+                  <Badge variant={outcomeTone(v.status) as "success" | "warning" | "danger" | "neutral" | "info"}>
+                    {outcomeLabel(v.status)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-sm">

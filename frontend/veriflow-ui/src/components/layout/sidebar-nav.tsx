@@ -32,14 +32,17 @@ export const adminNavSections: NavSection[] = [
     items: [{ label: "Dashboard", href: "/admin", icon: LayoutDashboard }],
   },
   {
-    label: "Institutions",
-    items: [{ label: "Institutions", href: "/admin/institutions", icon: Building2 }],
+    label: "Management",
+    items: [
+      { label: "Institutions", href: "/admin/institutions", icon: Building2 },
+      { label: "Verification activity", href: "/admin/audit-logs", icon: History },
+    ],
   },
   {
-    label: "Oversight",
+    label: "System",
     items: [
       { label: "Audit logs", href: "/admin/audit-logs", icon: ScrollText },
-      { label: "System settings", href: "/admin/settings", icon: Settings },
+      { label: "Settings", href: "/admin/settings", icon: Settings },
     ],
   },
 ];

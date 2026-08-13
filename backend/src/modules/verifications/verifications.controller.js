@@ -27,7 +27,7 @@ export async function getVerificationController(req, res) {
 }
 
 export async function lookupByReferenceController(req, res) {
-  const result = await verificationsService.lookupByReference(req.params.reference);
+  const result = await verificationsService.lookupByReference(req.params.reference, req);
   res.status(200).json({ status: 'success', data: result });
 }
 
@@ -93,6 +93,29 @@ export async function getVerificationMetadataController(_req, res) {
 
 export async function verifyPublicController(req, res) {
   const { identifier } = req.body;
-  const result = await verifyCertificate(identifier);
-  res.status(200).json({ status: 'success', data: result });
+  try {
+    const result = await verifyCertificate(identifier);
+    res.status(200).json({ status: 'success', data: result });
+  } catch (err) {
+    if (err.statusCode === 404) {
+      // Record the NOT_FOUND event for activity tracking
+      try {
+        const { VerificationsRepository } = await import('./verifications.repository.js');
+        const repo = new VerificationsRepository();
+        const record = await repo.create({
+          method: 'REFERENCE',
+          status: 'NOT_FOUND',
+          requestedFields: { identifier },
+          verifierIp: req?.ip || req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || null,
+          verifierUserAgent: req?.headers?.['user-agent'] || null,
+        });
+        await repo.markCompleted(record._id, {
+          status: 'NOT_FOUND',
+          confidenceScore: 0,
+          completedAt: new Date(),
+        });
+      } catch (_recErr) { /* non-fatal */ }
+    }
+    throw err;
+  }
 }

@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Activity, Building2, FileCheck2, HeartPulse, ShieldCheck, Users } from "lucide-react";
+import { Activity, Building2, HeartPulse, ShieldCheck, ShieldX, TrendingUp, Users } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { ActivityFeed } from "@/components/common/activity-feed";
 import { ProtectedRoute } from "@/components/common/protected-route";
@@ -11,6 +12,9 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+
+import { api } from "@/lib/api";
+import type { DashboardAnalytics, VerificationRecord } from "@/lib/api/contracts";
 
 export const Route = createFileRoute("/admin/")({
   component: AdminDashboardPage,
@@ -34,6 +38,26 @@ export const Route = createFileRoute("/admin/")({
 });
 
 function AdminDashboardContent() {
+  const [analytics, setAnalytics] = useState<DashboardAnalytics | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.analytics.dashboard()
+      .then((res) => {
+        const data = (res as { data?: DashboardAnalytics })?.data ?? (res as unknown as DashboardAnalytics);
+        setAnalytics(data ?? null);
+      })
+      .catch(() => setAnalytics(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const totalInstitutions = analytics?.institutionCount ?? 0;
+  const totalVerifications = analytics?.verifications?.total ?? 0;
+  const authenticVerifications = analytics?.verifications?.authentic ?? 0;
+  const failedVerifications = (analytics?.verifications?.notFound ?? 0) + (analytics?.verifications?.invalid ?? 0) + (analytics?.verifications?.error ?? 0);
+  const successRate = analytics?.verifications?.successRate ?? 0;
+  const recentVerifications = analytics?.recentVerifications ?? [];
+
   return (
     <AppLayout title="Admin" currentPath="/admin">
       <PageSection className="space-y-6">
@@ -44,10 +68,30 @@ function AdminDashboardContent() {
         />
 
         <Grid cols={4}>
-          <StatCard label="Institutions" icon={Building2} hint="Registered issuers" />
-          <StatCard label="Certificates" icon={FileCheck2} hint="Across all institutions" />
-          <StatCard label="Verifications" icon={ShieldCheck} hint="Lifetime requests" />
-          <StatCard label="Active users" icon={Users} hint="Staff accounts" />
+          <StatCard
+            label="Institutions"
+            icon={Building2}
+            hint="Registered issuers"
+            value={loading ? undefined : totalInstitutions}
+          />
+          <StatCard
+            label="Verifications"
+            icon={ShieldCheck}
+            hint="Lifetime requests"
+            value={loading ? undefined : totalVerifications}
+          />
+          <StatCard
+            label="Successful"
+            icon={TrendingUp}
+            hint="Confirmed credentials"
+            value={loading ? undefined : authenticVerifications}
+          />
+          <StatCard
+            label="Success rate"
+            icon={Activity}
+            hint="Verification accuracy"
+            value={loading ? undefined : `${Math.round(successRate)}%`}
+          />
         </Grid>
 
         <SectionCard title="Quick actions" description="Common super administrator tasks">
@@ -68,29 +112,42 @@ function AdminDashboardContent() {
         </SectionCard>
 
         <div className="grid gap-5 lg:grid-cols-2">
-          <SectionCard title="Verification overview" description="Outcome distribution">
+          <SectionCard title="Verification outcomes" description="Distribution of results">
             <div className="space-y-4">
-              {["Authentic", "Suspicious", "Invalid", "Inconclusive"].map((label) => (
+              {[
+                { label: "Verified", value: authenticVerifications, color: "text-success" },
+                { label: "Suspicious", value: analytics?.verifications?.suspicious ?? 0, color: "text-warning" },
+                { label: "Not found", value: analytics?.verifications?.notFound ?? 0, color: "text-info" },
+                { label: "Failed / Error", value: failedVerifications, color: "text-destructive" },
+              ].map(({ label, value, color }) => (
                 <div key={label} className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-sm text-foreground">{label}</span>
-                    <span className="font-mono text-sm text-muted-foreground">—</span>
+                    <span className={`font-mono text-sm ${color}`}>{loading ? "—" : value}</span>
                   </div>
-                  <Progress value={0} className="h-1.5" />
+                  <Progress
+                    value={totalVerifications > 0 ? (value / totalVerifications) * 100 : 0}
+                    className="h-1.5"
+                  />
                 </div>
               ))}
             </div>
           </SectionCard>
 
-          <SectionCard title="Institution overview" description="Onboarding and status">
-            <div className="space-y-4">
-              {["Active", "Pending approval", "Suspended"].map((label) => (
-                <div
-                  key={label}
-                  className="flex items-center justify-between gap-3 border-b border-border pb-3 last:border-0 last:pb-0"
-                >
-                  <span className="text-sm text-foreground">{label}</span>
-                  <span className="font-mono text-sm text-muted-foreground">—</span>
+          <SectionCard title="Platform status" description="Service health">
+            <div className="space-y-3">
+              {[
+                { label: "API", status: "Operational" },
+                { label: "Database", status: "Operational" },
+                { label: "Document extraction", status: "Operational" },
+                { label: "Verification engine", status: "Operational" },
+              ].map(({ label, status }) => (
+                <div key={label} className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <HeartPulse className="size-3.5" aria-hidden="true" />
+                    {label}
+                  </span>
+                  <Badge variant="success">{status}</Badge>
                 </div>
               ))}
             </div>
@@ -99,43 +156,60 @@ function AdminDashboardContent() {
 
         <div className="grid gap-5 lg:grid-cols-3">
           <SectionCard
-            title="Recent activities"
-            description="Latest platform events"
+            title="Recent verification activity"
+            description="Latest verification requests across all institutions"
             className="lg:col-span-2"
             bodyClassName="p-0"
           >
-            <ActivityFeed emptyDescription="Platform-wide events appear here as institutions issue and verify certificates." />
+            {loading ? (
+              <ActivityFeed loading />
+            ) : recentVerifications.length === 0 ? (
+              <ActivityFeed emptyDescription="Verification activity appears here as certificates are verified across the platform." />
+            ) : (
+              <ul className="divide-y divide-border">
+                {recentVerifications.slice(0, 10).map((v: VerificationRecord) => {
+                  const isSuccess = v.status === "AUTHENTIC";
+                  const isPending = v.status === "PENDING" || v.status === "IN_PROGRESS";
+                  return (
+                    <li key={v._id} className="flex items-center gap-3 px-4 py-3">
+                      <span className={`grid size-8 shrink-0 place-items-center rounded-full ${isSuccess ? "bg-success-subtle text-success" : isPending ? "bg-muted text-muted-foreground" : "bg-info-subtle text-info"}`}>
+                        {isSuccess ? <ShieldCheck className="size-4" /> : isPending ? <Activity className="size-4" /> : <ShieldX className="size-4" />}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm text-foreground">
+                          {isSuccess ? "Certificate verified" : isPending ? "Verification in progress" : v.status === "NOT_FOUND" ? "Credential not found" : v.status}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {v.method} · {v.verificationReference}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {v.createdAt ? new Date(v.createdAt).toLocaleDateString() : "—"}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </SectionCard>
 
-          <div className="space-y-5">
-            <SectionCard title="Audit summary" description="Last 24 hours">
-              <div className="space-y-3">
-                {["Sign-ins", "Record changes", "Failed attempts", "Exports"].map((label) => (
-                  <div key={label} className="flex items-center justify-between gap-3">
-                    <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Activity className="size-3.5" aria-hidden="true" />
-                      {label}
-                    </span>
-                    <span className="font-mono text-sm text-foreground">—</span>
-                  </div>
-                ))}
-              </div>
-            </SectionCard>
-
-            <SectionCard title="System health" description="Service availability">
-              <div className="space-y-3">
-                {["API", "Document extraction", "Storage", "Verification queue"].map((label) => (
-                  <div key={label} className="flex items-center justify-between gap-3">
-                    <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <HeartPulse className="size-3.5" aria-hidden="true" />
-                      {label}
-                    </span>
-                    <Badge variant="neutral">Awaiting status</Badge>
-                  </div>
-                ))}
-              </div>
-            </SectionCard>
-          </div>
+          <SectionCard title="Audit summary" description="Last 24 hours">
+            <div className="space-y-3">
+              {[
+                { label: "Total verifications", value: analytics?.verifications?.last7Days ?? 0 },
+                { label: "Average confidence", value: analytics?.verifications?.averageConfidence ? `${Math.round(analytics.verifications.averageConfidence)}%` : "—" },
+                { label: "Pending review", value: analytics?.verifications?.pending ?? 0 },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Activity className="size-3.5" aria-hidden="true" />
+                    {label}
+                  </span>
+                  <span className="font-mono text-sm text-foreground">{value}</span>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
         </div>
       </PageSection>
     </AppLayout>

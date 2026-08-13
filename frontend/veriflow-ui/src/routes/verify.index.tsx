@@ -1,10 +1,16 @@
-import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { BadgeCheck, QrCode, ShieldCheck, Upload as UploadIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FileUpload } from "@/components/common/file-upload";
 import { FormField } from "@/components/common/form-field";
 import { SectionCard } from "@/components/common/section-card";
+import {
+  VerificationProgress,
+  DocumentVerificationProgress,
+  type VerificationStage,
+  type DocumentStage,
+} from "@/components/common/verification-progress";
 import { Logo } from "@/components/brand/logo";
 import { Container } from "@/components/layout/container";
 import { Footer } from "@/components/layout/footer";
@@ -37,8 +43,84 @@ export const Route = createFileRoute("/verify/")({
   }),
 });
 
+/** Simulate stage progression during an API call. */
+function useStageProgress(stages: VerificationStage[], active: boolean): VerificationStage {
+  const [stageIdx, setStageIdx] = useState(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setStageIdx(0);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      return;
+    }
+    setStageIdx(0);
+    intervalRef.current = setInterval(() => {
+      setStageIdx((prev) => {
+        if (prev >= stages.length - 2) {
+          // Hold at second-to-last stage until complete
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 400);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [active, stages.length]);
+
+  return (stages[Math.min(stageIdx, stages.length - 1)] ?? stages[0]) as VerificationStage;
+}
+
+function useDocStageProgress(stages: DocumentStage[], active: boolean): DocumentStage {
+  const [stageIdx, setStageIdx] = useState(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setStageIdx(0);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      return;
+    }
+    setStageIdx(0);
+    intervalRef.current = setInterval(() => {
+      setStageIdx((prev) => {
+        if (prev >= stages.length - 2) {
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 600);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [active, stages.length]);
+
+  return (stages[Math.min(stageIdx, stages.length - 1)] ?? stages[0]) as DocumentStage;
+}
+
+const VERIFY_STAGES: VerificationStage[] = [
+  "initializing",
+  "validating",
+  "searching",
+  "resolving",
+  "checking",
+  "complete",
+];
+
+const DOC_STAGES: DocumentStage[] = [
+  "receiving",
+  "analysing",
+  "extracting",
+  "detecting",
+  "looking_up",
+  "matching",
+  "complete",
+];
+
 function PublicVerifyPage() {
-  const navigate = useNavigate();
   const router = useRouter();
   const [certificateNumber, setCertificateNumber] = useState("");
   const [surname, setSurname] = useState("");
@@ -58,14 +140,17 @@ function PublicVerifyPage() {
   const uploadFileState = useMemo(() => (uploadFile ? { file: uploadFile } : null), [uploadFile]);
   const qrFileState = useMemo(() => (qrFile ? { file: qrFile } : null), [qrFile]);
 
+  const numberStage = useStageProgress(VERIFY_STAGES, numberLoading);
+  const qrStage = useStageProgress(VERIFY_STAGES, qrLoading);
+  const docStage = useDocStageProgress(DOC_STAGES, uploadLoading);
+
   async function handleVerifyByNumber(e: React.FormEvent) {
     e.preventDefault();
     setNumberLoading(true);
     setNumberError(null);
     try {
       const result = await api.verifications.verifyPublic(certificateNumber);
-      const ref =
-        result?.data?.certificate?.verificationReference;
+      const ref = result?.data?.certificate?.verificationReference;
       if (!ref) {
         setNumberError("Verification returned no reference. Try again.");
         return;
@@ -75,9 +160,14 @@ function PublicVerifyPage() {
         search: { ref, method: "number" },
       });
     } catch (err) {
-      const msg = (err as ApiError).message || "Verification failed. Please try again.";
-      setNumberError(msg);
-      toast.error(msg);
+      const apiErr = err as ApiError;
+      if (apiErr.statusCode === 404) {
+        setNumberError("not_found");
+      } else {
+        const msg = apiErr.message || "Verification failed. Please try again.";
+        setNumberError(msg);
+        toast.error(msg);
+      }
     } finally {
       setNumberLoading(false);
     }
@@ -95,7 +185,7 @@ function PublicVerifyPage() {
       const result = await api.verifications.verifyByUpload(uploadFile, {
         surname: surname || undefined,
         matricNumber: matricNumber || undefined,
-      });
+      } as { surname?: string; matricNumber?: string });
       const data = result?.data;
       if (data?.verified && data.result?.certificate?.verificationReference) {
         await router.navigate({
@@ -103,9 +193,19 @@ function PublicVerifyPage() {
           search: { ref: data.result.certificate.verificationReference, method: "upload" },
         });
       } else {
-        const msg = data?.message || "Could not extract a verification identifier from this document. Try entering the reference or certificate number directly.";
-        setUploadError(msg);
-        toast.error(msg);
+        // Determine the failure reason for proper UX
+        const reason = data?.reason;
+        if (reason === "NO_TEXT" || reason === "OCR_FAILED") {
+          setUploadError("ocr_failure");
+        } else if (reason === "NO_IDENTIFIER") {
+          setUploadError("no_identifier");
+        } else if (reason === "NOT_FOUND") {
+          setUploadError("not_found");
+        } else if (reason === "LOW_CONFIDENCE") {
+          setUploadError("low_confidence");
+        } else {
+          setUploadError("not_found");
+        }
       }
     } catch (err) {
       const msg = (err as ApiError).message || "Verification failed. Please try again.";
@@ -132,8 +232,7 @@ function PublicVerifyPage() {
         return;
       }
       const result = await api.verifications.verifyPublic(identifier);
-      const ref =
-        result?.data?.certificate?.verificationReference;
+      const ref = result?.data?.certificate?.verificationReference;
       if (!ref) {
         setQrError("Verification returned no reference. Try again.");
         return;
@@ -143,9 +242,14 @@ function PublicVerifyPage() {
         search: { ref, method: "qr" },
       });
     } catch (err) {
-      const msg = (err as ApiError).message || "QR verification failed. Please try again.";
-      setQrError(msg);
-      toast.error(msg);
+      const apiErr = err as ApiError;
+      if (apiErr.statusCode === 404) {
+        setQrError("not_found");
+      } else {
+        const msg = apiErr.message || "QR verification failed. Please try again.";
+        setQrError(msg);
+        toast.error(msg);
+      }
     } finally {
       setQrLoading(false);
     }
@@ -179,7 +283,7 @@ function PublicVerifyPage() {
             <Tabs defaultValue="number">
               <TabsList className="w-full">
                 <TabsTrigger value="number" className="flex-1">
-                  Certificate number
+                  Verification key
                 </TabsTrigger>
                 <TabsTrigger value="upload" className="flex-1">
                   Upload document
@@ -190,117 +294,127 @@ function PublicVerifyPage() {
               </TabsList>
 
               <TabsContent value="number" className="mt-5">
-                <form className="space-y-5" onSubmit={handleVerifyByNumber}>
-                  <FormField
-                    id="certificate-number"
-                    label="Certificate number"
-                    hint="Printed on the certificate, usually near the seal"
-                    required
-                    error={numberError || undefined}
-                  >
-                    <Input
-                      id="certificate-number"
-                      value={certificateNumber}
-                      onChange={(event) => setCertificateNumber(event.target.value)}
-                      className="font-mono"
-                      placeholder="e.g. CERT-0000-0000"
-                    />
-                  </FormField>
-                  <div className="grid gap-4 sm:grid-cols-2">
+                {numberLoading ? (
+                  <VerificationProgress currentStage={numberStage} loading />
+                ) : numberError === "not_found" ? (
+                  <VerificationFailureState
+                    identifier={certificateNumber}
+                    method="Verification key"
+                    onRetry={() => {
+                      setNumberError(null);
+                      setCertificateNumber("");
+                    }}
+                  />
+                ) : (
+                  <form className="space-y-5" onSubmit={handleVerifyByNumber}>
                     <FormField
-                      id="graduate-surname"
-                      label="Graduate surname"
-                      hint="Used to confirm the record belongs to the holder"
+                      id="certificate-number"
+                      label="Verification key or certificate number"
+                      hint="Enter the verification reference, certificate number, or registration number"
+                      required
+                      error={numberError && numberError !== "not_found" ? numberError : undefined}
                     >
                       <Input
-                        id="graduate-surname"
-                        name="surname"
-                        autoComplete="family-name"
-                        value={surname}
-                        onChange={(e) => setSurname(e.target.value)}
-                      />
-                    </FormField>
-                    <FormField id="graduate-matric" label="Matric number (optional)">
-                      <Input
-                        id="graduate-matric"
-                        name="matricNumber"
+                        id="certificate-number"
+                        value={certificateNumber}
+                        onChange={(event) => setCertificateNumber(event.target.value)}
                         className="font-mono"
-                        value={matricNumber}
-                        onChange={(e) => setMatricNumber(e.target.value)}
+                        placeholder="e.g. UNNV001K0L1BO or UNN-CERT-0001-2026"
                       />
                     </FormField>
-                  </div>
-                  <Button type="submit" className="w-full sm:w-auto" disabled={numberLoading}>
-                    <BadgeCheck aria-hidden="true" />
-                    {numberLoading ? "Verifying…" : "Verify certificate"}
-                  </Button>
-                </form>
+                    <Button type="submit" className="w-full sm:w-auto" disabled={numberLoading || !certificateNumber.trim()}>
+                      <BadgeCheck aria-hidden="true" />
+                      Verify certificate
+                    </Button>
+                  </form>
+                )}
               </TabsContent>
 
               <TabsContent value="upload" className="mt-5">
-                <form className="space-y-5" onSubmit={handleVerifyByUpload}>
-                  <FileUpload
-                    label="Upload the certificate"
-                    hint="PDF, PNG or JPG"
-                    maxSizeMb={10}
-                    onFilesSelected={(files) => setUploadFile(files[0] ?? null)}
-                    controlledValue={uploadFileState}
-                    error={uploadError || undefined}
+                {uploadLoading ? (
+                  <DocumentVerificationProgress currentStage={docStage} loading />
+                ) : uploadError === "ocr_failure" ? (
+                  <OcrFailureState
+                    onRetry={() => {
+                      setUploadError(null);
+                      setUploadFile(null);
+                    }}
                   />
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField id="upload-surname" label="Graduate surname (optional)">
-                      <Input
-                        id="upload-surname"
-                        name="surname"
-                        value={surname}
-                        onChange={(e) => setSurname(e.target.value)}
-                      />
-                    </FormField>
-                    <FormField id="upload-matric" label="Matric number (optional)">
-                      <Input
-                        id="upload-matric"
-                        name="matricNumber"
-                        className="font-mono"
-                        value={matricNumber}
-                        onChange={(e) => setMatricNumber(e.target.value)}
-                      />
-                    </FormField>
-                  </div>
-                  <Button type="submit" className="w-full sm:w-auto" disabled={uploadLoading}>
-                    <UploadIcon aria-hidden="true" />
-                    {uploadLoading ? "Analysing & verifying…" : "Verify certificate"}
-                  </Button>
-                </form>
+                ) : uploadError === "no_identifier" ? (
+                  <NoIdentifierState
+                    onRetry={() => {
+                      setUploadError(null);
+                      setUploadFile(null);
+                    }}
+                  />
+                ) : uploadError === "not_found" ? (
+                  <VerificationFailureState
+                    identifier="Uploaded document"
+                    method="Document upload"
+                    onRetry={() => {
+                      setUploadError(null);
+                      setUploadFile(null);
+                    }}
+                  />
+                ) : uploadError === "low_confidence" ? (
+                  <LowConfidenceState
+                    onRetry={() => {
+                      setUploadError(null);
+                      setUploadFile(null);
+                    }}
+                  />
+                ) : (
+                  <form className="space-y-5" onSubmit={handleVerifyByUpload}>
+                    <FileUpload
+                      label="Upload the certificate"
+                      hint="PDF, PNG or JPG"
+                      maxSizeMb={10}
+                      onFilesSelected={(files) => setUploadFile(files[0] ?? null)}
+                      controlledValue={uploadFileState}
+                      error={uploadError && !["ocr_failure", "no_identifier", "not_found", "low_confidence"].includes(uploadError) ? uploadError : undefined}
+                    />
+                    <Button type="submit" className="w-full sm:w-auto" disabled={uploadLoading || !uploadFile}>
+                      <UploadIcon aria-hidden="true" />
+                      Verify certificate
+                    </Button>
+                  </form>
+                )}
               </TabsContent>
 
               <TabsContent value="qr" className="mt-5">
-                <form className="space-y-5" onSubmit={handleVerifyByQr}>
-                  <FileUpload
-                    label="Upload a QR code image"
-                    hint="PNG or JPG"
-                    maxSizeMb={5}
-                    onFilesSelected={(files) => setQrFile(files[0] ?? null)}
-                    controlledValue={qrFileState}
-                    error={qrError || undefined}
+                {qrLoading ? (
+                  <VerificationProgress currentStage={qrStage} loading />
+                ) : qrError === "not_found" ? (
+                  <VerificationFailureState
+                    identifier={qrReference}
+                    method="QR code"
+                    onRetry={() => {
+                      setQrError(null);
+                      setQrReference("");
+                      setQrFile(null);
+                    }}
                   />
-                  <FormField
-                    id="qr-reference"
-                    label="Or enter verification reference"
-                    hint="Printed next to the QR code on the certificate"
-                  >
-                    <Input
+                ) : (
+                  <form className="space-y-5" onSubmit={handleVerifyByQr}>
+                    <FormField
                       id="qr-reference"
-                      className="font-mono"
-                      value={qrReference}
-                      onChange={(e) => setQrReference(e.target.value)}
-                      placeholder="e.g. V1XYZ012ABC"
-                    />
-                  </FormField>
-                  <Button type="submit" className="w-full sm:w-auto" disabled={qrLoading}>
-                    <QrCode aria-hidden="true" />
-                    {qrLoading ? "Verifying QR…" : "Verify via QR"}
-                  </Button>
-                </form>
+                      label="Verification reference"
+                      hint="Enter the reference from the QR code or printed on the certificate"
+                    >
+                      <Input
+                        id="qr-reference"
+                        className="font-mono"
+                        value={qrReference}
+                        onChange={(e) => setQrReference(e.target.value)}
+                        placeholder="e.g. UNNV001K0L1BO"
+                      />
+                    </FormField>
+                    <Button type="submit" className="w-full sm:w-auto" disabled={qrLoading || !qrReference.trim()}>
+                      <QrCode aria-hidden="true" />
+                      Verify via QR
+                    </Button>
+                  </form>
+                )}
               </TabsContent>
             </Tabs>
           </SectionCard>
@@ -313,6 +427,161 @@ function PublicVerifyPage() {
       </main>
 
       <Footer />
+    </div>
+  );
+}
+
+// ─── Failure State Components ────────────────────────────────────────────────
+
+function VerificationFailureState({
+  identifier,
+  method,
+  onRetry,
+}: {
+  identifier: string;
+  method: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="space-y-5 py-4">
+      <div className="rounded-lg border border-info/30 bg-info-subtle p-5">
+        <div className="flex items-start gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-full bg-card text-info">
+            <ShieldCheck className="size-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-foreground">Verification completed</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              No matching verified credential was found for the submitted identifier.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2 rounded-md bg-card p-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Identifier</span>
+            <span className="font-mono text-xs text-foreground">{identifier || "—"}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Method</span>
+            <span className="text-xs text-foreground">{method}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Status</span>
+            <span className="text-xs font-medium text-destructive">NOT VERIFIED</span>
+          </div>
+        </div>
+
+        <p className="mt-3 text-xs text-muted-foreground">
+          The submitted identifier could not be matched to a published certificate in the verification registry.
+          This does not confirm or deny any academic status.
+        </p>
+      </div>
+
+      <Button variant="outline" onClick={onRetry} className="w-full sm:w-auto">
+        Try again
+      </Button>
+    </div>
+  );
+}
+
+function OcrFailureState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="space-y-5 py-4">
+      <div className="rounded-lg border border-warning/30 bg-warning-subtle p-5">
+        <div className="flex items-start gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-full bg-card text-warning">
+            <UploadIcon className="size-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-foreground">Document could not be processed</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              We couldn't reliably extract a verification identifier from this document.
+              The image may be too blurry, rotated, or the document format is not supported.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2 rounded-md bg-card p-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">OCR extraction</span>
+            <span className="text-xs font-medium text-warning">UNABLE TO READ</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Registry lookup</span>
+            <span className="text-xs text-muted-foreground">SKIPPED</span>
+          </div>
+        </div>
+      </div>
+
+      <Button variant="outline" onClick={onRetry} className="w-full sm:w-auto">
+        Try another document
+      </Button>
+    </div>
+  );
+}
+
+function NoIdentifierState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="space-y-5 py-4">
+      <div className="rounded-lg border border-info/30 bg-info-subtle p-5">
+        <div className="flex items-start gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-full bg-card text-info">
+            <ShieldCheck className="size-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-foreground">No identifier found</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              OCR completed successfully but no verification reference, certificate number,
+              or registration number could be detected in this document.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2 rounded-md bg-card p-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">OCR extraction</span>
+            <span className="text-xs font-medium text-success">SUCCESS</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Identifier detection</span>
+            <span className="text-xs font-medium text-warning">NO IDENTIFIER FOUND</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Registry lookup</span>
+            <span className="text-xs text-muted-foreground">SKIPPED</span>
+          </div>
+        </div>
+      </div>
+
+      <Button variant="outline" onClick={onRetry} className="w-full sm:w-auto">
+        Try another document
+      </Button>
+    </div>
+  );
+}
+
+function LowConfidenceState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="space-y-5 py-4">
+      <div className="rounded-lg border border-warning/30 bg-warning-subtle p-5">
+        <div className="flex items-start gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-full bg-card text-warning">
+            <ShieldCheck className="size-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-foreground">Low confidence extraction</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              An identifier was detected but with low confidence. For accurate results,
+              please enter the verification reference or certificate number directly.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <Button variant="outline" onClick={onRetry} className="w-full sm:w-auto">
+        Try again
+      </Button>
     </div>
   );
 }

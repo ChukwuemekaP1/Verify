@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
-  BadgeAlert,
   CheckCircle2,
   Download,
+  ExternalLink,
+  FileText,
   ShieldAlert,
   ShieldCheck,
   ShieldX,
@@ -18,7 +19,6 @@ import { Container } from "@/components/layout/container";
 import { Footer } from "@/components/layout/footer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDateLong, formatDateTimeShort } from "@/lib/utils";
 
@@ -42,13 +42,12 @@ export const Route = createFileRoute("/verify/result")({
       { title: "Verification result — Verifis" },
       {
         name: "description",
-        content:
-          "Outcome of a certificate verification, including institution details, confidence and an auditable timestamp.",
+        content: "Outcome of a certificate verification from the Verifis registry.",
       },
       { property: "og:title", content: "Verification result — Verifis" },
       {
         property: "og:description",
-        content: "Authentic, suspicious or invalid — with confidence and audit reference.",
+        content: "Certificate verification result from the Verifis registry.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -56,7 +55,7 @@ export const Route = createFileRoute("/verify/result")({
   }),
 });
 
-type OutcomeTone = "authentic" | "suspicious" | "invalid" | "not_found" | "pending" | "error";
+type OutcomeTone = "verified" | "revoked" | "not_found" | "error";
 
 const toneMap: Record<
   OutcomeTone,
@@ -64,126 +63,83 @@ const toneMap: Record<
     label: string;
     headline: string;
     body: string;
-    badge: "success" | "warning" | "danger" | "info" | "neutral";
+    badge: "success" | "danger" | "info" | "neutral";
     icon: typeof CheckCircle2;
     ring: string;
     tone: string;
+    bgGradient: string;
   }
 > = {
-  authentic: {
-    label: "Authentic",
-    headline: "Certificate confirmed authentic",
-    body: "The record matches the issuing institution's data with no discrepancies detected.",
+  verified: {
+    label: "Certificate Verified",
+    headline: "This credential has been verified",
+    body: "The certificate matches a published record in the issuing institution's registry. All details below are confirmed by the awarding body.",
     badge: "success",
     icon: CheckCircle2,
-    ring: "border-success/30 bg-success-subtle",
+    ring: "border-success/30",
     tone: "text-success",
+    bgGradient: "bg-gradient-to-br from-success-subtle to-card",
   },
-  suspicious: {
-    label: "Suspicious",
-    headline: "Certificate needs manual review",
-    body: "Some fields do not align with the institution's record. A reviewer should confirm before relying on this result.",
-    badge: "warning",
-    icon: ShieldAlert,
-    ring: "border-warning/30 bg-warning-subtle",
-    tone: "text-warning",
-  },
-  invalid: {
-    label: "Invalid",
-    headline: "Certificate invalid or revoked",
-    body: "This record has been revoked by the issuing institution, or it failed to match stored credential details.",
+  revoked: {
+    label: "Revoked",
+    headline: "This certificate has been revoked",
+    body: "The issuing institution has revoked this certificate. It is no longer valid.",
     badge: "danger",
     icon: ShieldX,
-    ring: "border-destructive/30 bg-destructive-subtle",
+    ring: "border-destructive/30",
     tone: "text-destructive",
+    bgGradient: "bg-gradient-to-br from-destructive-subtle to-card",
   },
   not_found: {
-    label: "Not found",
-    headline: "No matching record found",
-    body: "We could not locate a published certificate matching the provided reference or number.",
+    label: "Not Verified",
+    headline: "No matching verified credential was found",
+    body: "The verification system completed its search but could not locate a published certificate matching the submitted identifier. This does not confirm or deny any academic status.",
     badge: "info",
-    icon: XCircle,
-    ring: "border-info/30 bg-info-subtle",
-    tone: "text-info",
-  },
-  pending: {
-    label: "In progress",
-    headline: "Verification in progress",
-    body: "The verification is still being computed. Refresh this page in a moment.",
-    badge: "neutral",
     icon: ShieldCheck,
-    ring: "border-muted/30 bg-surface",
-    tone: "text-muted-foreground",
+    ring: "border-info/30",
+    tone: "text-info",
+    bgGradient: "bg-gradient-to-br from-info-subtle to-card",
   },
   error: {
     label: "Error",
-    headline: "Verification error",
-    body: "An unexpected error occurred while running this verification. Try again or contact the institution.",
+    headline: "Verification could not be completed",
+    body: "An unexpected error occurred during the verification process. Please try again or contact the institution.",
     badge: "danger",
     icon: AlertTriangle,
-    ring: "border-destructive/30 bg-destructive-subtle",
+    ring: "border-destructive/30",
     tone: "text-destructive",
+    bgGradient: "bg-gradient-to-br from-destructive-subtle to-card",
   },
 };
-
-function statusToTone(status?: VerificationStatus | string | null): OutcomeTone {
-  if (!status) return "pending";
-  switch (status) {
-    case "AUTHENTIC":
-      return "authentic";
-    case "SUSPICIOUS":
-      return "suspicious";
-    case "INVALID":
-    case "REVOKED":
-      return "invalid";
-    case "NOT_FOUND":
-      return "not_found";
-    case "PENDING":
-    case "IN_PROGRESS":
-      return "pending";
-    case "ERROR":
-    default:
-      return status === "ERROR" ? "error" : "pending";
-  }
-}
 
 function VerificationResultPage() {
   const search = Route.useSearch();
   const loaderData = Route.useLoaderData();
   const lookup = loaderData as PublicVerifyResponse | ReferenceLookupResponse | null;
-  const [manual, setManual] = useState<OutcomeTone | null>(null);
-
-  useEffect(() => {
-    if (!search.ref) {
-      setManual("not_found");
-    }
-  }, [search.ref]);
 
   const isPublicVerify = lookup && "verifiedAt" in lookup && lookup.verified;
   const isLegacyLookup = lookup && "lookedUpAt" in lookup;
 
   const toneKey: OutcomeTone = useMemo(() => {
-    if (manual) return manual;
-    if (!lookup) return search.ref ? "pending" : "not_found";
+    if (!lookup) return search.ref ? "error" : "not_found";
 
     if (isPublicVerify) {
       const pub = lookup as PublicVerifyResponse;
-      if (pub.verified && pub.certificate?.status === "PUBLISHED") return "authentic";
-      if (pub.certificate?.status === "REVOKED") return "invalid";
+      if (pub.verified && pub.certificate?.status === "PUBLISHED") return "verified";
+      if (pub.certificate?.status === "REVOKED") return "revoked";
       return "not_found";
     }
 
     if (isLegacyLookup) {
       const leg = lookup as ReferenceLookupResponse;
       const certStatus = leg.certificate && "status" in leg.certificate ? leg.certificate.status : undefined;
-      if (certStatus === "PUBLISHED") return "authentic";
-      if (certStatus === "REVOKED") return "invalid";
-      if (leg.status) return statusToTone(leg.status);
+      if (certStatus === "PUBLISHED") return "verified";
+      if (certStatus === "REVOKED") return "revoked";
       return "not_found";
     }
 
     return "not_found";
-  }, [lookup, manual, search.ref, isPublicVerify, isLegacyLookup]);
+  }, [lookup, search.ref, isPublicVerify, isLegacyLookup]);
 
   const tone = toneMap[toneKey];
   const Icon = tone.icon;
@@ -198,7 +154,6 @@ function VerificationResultPage() {
     ? (lookup as PublicVerifyResponse).institution
     : (lookup as ReferenceLookupResponse)?.institution;
 
-  const confidence = isLegacyLookup ? (lookup as ReferenceLookupResponse).confidenceScore ?? null : (isPublicVerify ? 100 : null);
   const verificationRef =
     (certificate && "verificationReference" in certificate ? certificate.verificationReference : null) ??
     (isLegacyLookup ? (lookup as ReferenceLookupResponse).verificationReference : null) ??
@@ -207,6 +162,17 @@ function VerificationResultPage() {
   const verifiedAt = isPublicVerify
     ? (lookup as PublicVerifyResponse).verifiedAt
     : (isLegacyLookup ? ((lookup as ReferenceLookupResponse).completedAt ?? (lookup as ReferenceLookupResponse).lookedUpAt) : null);
+
+  const methodLabel =
+    search.method === "number"
+      ? "Certificate number"
+      : search.method === "upload"
+        ? "Document upload (OCR)"
+        : search.method === "qr"
+          ? "QR code"
+          : "Verification reference";
+
+  const isVerified = toneKey === "verified";
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -223,128 +189,171 @@ function VerificationResultPage() {
 
       <main className="flex-1 py-8 sm:py-12">
         <Container size="narrow" className="space-y-6">
-          <section className={cn("rounded-lg border p-5 sm:p-6", tone.ring)}>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex gap-4">
-                <span
-                  className={cn(
-                    "grid size-11 shrink-0 place-items-center rounded-full bg-card",
-                    tone.tone,
-                  )}
-                >
-                  <Icon className="size-5" aria-hidden="true" />
-                </span>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="text-title text-foreground">{tone.headline}</h1>
-                    <Badge variant={tone.badge}>{tone.label}</Badge>
+          {/* ── Status Header ── */}
+          <section className={cn("overflow-hidden rounded-xl border", tone.ring, tone.bgGradient)}>
+            <div className="p-5 sm:p-8">
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex gap-4">
+                  <span
+                    className={cn(
+                      "grid size-14 shrink-0 place-items-center rounded-2xl bg-card shadow-sm",
+                      tone.tone,
+                    )}
+                  >
+                    <Icon className="size-7" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <Badge variant={tone.badge} className="mb-2">
+                      {tone.label}
+                    </Badge>
+                    <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">
+                      {tone.headline}
+                    </h1>
+                    <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
+                      {tone.body}
+                    </p>
                   </div>
-                  <p className="mt-2 max-w-xl text-sm text-muted-foreground">{tone.body}</p>
                 </div>
               </div>
-              <Button variant="outline" size="sm" className="shrink-0 bg-card">
-                <Download aria-hidden="true" />
-                Download report
-              </Button>
-            </div>
 
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <div>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs text-muted-foreground">Match confidence</p>
-                  {confidence === null ? (
-                    <Skeleton className="h-4 w-14 rounded" />
-                  ) : (
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {Math.round(confidence)}%
-                    </span>
-                  )}
+              {/* Summary row */}
+              <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div className="rounded-lg bg-card/60 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Method</p>
+                  <p className="mt-1 text-sm font-medium text-foreground">{methodLabel}</p>
                 </div>
-                <Progress
-                  value={confidence ?? 0}
-                  className="mt-2 h-1.5"
-                  aria-hidden={confidence === null}
-                />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Verified at</p>
-                <p className="mt-1 font-mono text-sm text-foreground">
-                  {verifiedAt ? formatDateTimeShort(verifiedAt) : "—"}
-                </p>
+                <div className="rounded-lg bg-card/60 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Reference</p>
+                  <p className="mt-1 truncate font-mono text-xs text-foreground">{verificationRef || "—"}</p>
+                </div>
+                <div className="rounded-lg bg-card/60 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Institution</p>
+                  <p className="mt-1 truncate text-sm text-foreground">{institution?.name ?? "—"}</p>
+                </div>
+                <div className="rounded-lg bg-card/60 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Verified at</p>
+                  <p className="mt-1 font-mono text-xs text-foreground">
+                    {verifiedAt ? formatDateTimeShort(verifiedAt) : "—"}
+                  </p>
+                </div>
               </div>
             </div>
           </section>
 
-          <SectionCard
-            title="Certificate information"
-            description="As recorded by the institution"
-          >
-            <DetailList
-              items={[
-                {
-                  label: "Certificate number",
-                  value: certificate?.certificateNumber ?? "—",
-                  mono: true,
-                },
-                {
-                  label: "Graduate name",
-                  value: graduate?.fullName ?? [graduate?.firstName, graduate?.middleName, graduate?.lastName].filter(Boolean).join(" ") ?? "—",
-                },
-                {
-                  label: "Registration number",
-                  value: (isPublicVerify
-                    ? (graduate as PublicVerifyResponse["graduate"])?.registrationNumber
-                    : (graduate as ReferenceLookupResponse["graduate"])?.matricNumber) ?? "—",
-                  mono: true,
-                },
-                {
-                  label: "Programme",
-                  value: graduate?.programme ?? "—",
-                },
-                {
-                  label: "Qualification level",
-                  value: certificate?.type ?? "—",
-                },
-                {
-                  label: "Classification",
-                  value: certificate?.classification ?? (graduate as PublicVerifyResponse["graduate"])?.classification ?? "—",
-                },
-                {
-                  label: "Issue date",
-                  value: certificate?.issueDate ? formatDateLong(certificate.issueDate) : "—",
-                },
-                {
-                  label: "Status",
-                  value: certificate?.status ?? "—",
-                },
-              ]}
-            />
-          </SectionCard>
+          {/* ── Verified: Certificate Details ── */}
+          {isVerified && certificate && (
+            <>
+              <SectionCard
+                title="Certificate details"
+                description="As recorded by the issuing institution"
+              >
+                <DetailList
+                  items={[
+                    {
+                      label: "Certificate number",
+                      value: certificate.certificateNumber ?? "—",
+                      mono: true,
+                    },
+                    {
+                      label: "Graduate name",
+                      value: graduate?.fullName ?? [graduate?.firstName, graduate?.middleName, graduate?.lastName].filter(Boolean).join(" ") ?? "—",
+                    },
+                    {
+                      label: "Registration number",
+                      value: (isPublicVerify
+                        ? (graduate as PublicVerifyResponse["graduate"])?.registrationNumber
+                        : (graduate as ReferenceLookupResponse["graduate"])?.matricNumber) ?? "—",
+                      mono: true,
+                    },
+                    {
+                      label: "Programme / Degree",
+                      value: certificate.programme ?? graduate?.programme ?? "—",
+                    },
+                    {
+                      label: "Classification",
+                      value: certificate.classification ?? (graduate as PublicVerifyResponse["graduate"])?.classification ?? "—",
+                    },
+                    {
+                      label: "Graduation year",
+                      value: graduate?.graduationYear ?? "—",
+                    },
+                    {
+                      label: "Issue date",
+                      value: certificate.issueDate ? formatDateLong(certificate.issueDate) : "—",
+                    },
+                    {
+                      label: "Credential status",
+                      value: certificate.status ?? "—",
+                    },
+                  ]}
+                />
+              </SectionCard>
 
-          <SectionCard title="Institution information" description="Awarding body">
-            <DetailList
-              items={[
-                { label: "Institution", value: institution?.name ?? "—" },
-                {
-                  label: "Verification prefix",
-                  value: (institution as { verificationPrefix?: string } | undefined)?.verificationPrefix ?? "—",
-                  mono: true,
-                },
-                {
-                  label: "Country / City",
-                  value: [institution?.country, institution?.city]
-                    .filter(Boolean)
-                    .join(", ") || "—",
-                },
-                {
-                  label: "Website",
-                  value: institution?.website ?? "—",
-                },
-              ]}
-            />
-          </SectionCard>
+              <SectionCard title="Issuing institution" description="Awarding body">
+                <DetailList
+                  items={[
+                    { label: "Institution", value: institution?.name ?? "—" },
+                    {
+                      label: "Country / City",
+                      value: [institution?.country, institution?.city]
+                        .filter(Boolean)
+                        .join(", ") || "—",
+                    },
+                    {
+                      label: "Website",
+                      value: institution?.website ?? "—",
+                    },
+                  ]}
+                />
+              </SectionCard>
 
-          <SectionCard title="Verification record" description="Keep this reference for audit">
+              {certificate.documentUrl && (
+                <div className="flex gap-2">
+                  <Button asChild>
+                    <a href={certificate.documentUrl} target="_blank" rel="noopener noreferrer">
+                      <FileText className="size-4" aria-hidden="true" />
+                      View certificate
+                    </a>
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── Not Found state ── */}
+          {!isVerified && toneKey === "not_found" && (
+            <SectionCard title="Verification details" description="What was checked">
+              <DetailList
+                items={[
+                  {
+                    label: "Identifier submitted",
+                    value: search.ref || "—",
+                    mono: true,
+                  },
+                  {
+                    label: "Verification method",
+                    value: methodLabel,
+                  },
+                  {
+                    label: "Registry search",
+                    value: "Completed — no match found",
+                  },
+                  {
+                    label: "Result",
+                    value: "No matching verified credential",
+                  },
+                  {
+                    label: "Timestamp",
+                    value: verifiedAt ? formatDateTimeShort(verifiedAt) : new Date().toISOString(),
+                    mono: true,
+                  },
+                ]}
+              />
+            </SectionCard>
+          )}
+
+          {/* ── Audit Reference ── */}
+          <SectionCard title="Audit reference" description="Retain this for your records">
             <DetailList
               items={[
                 {
@@ -353,19 +362,13 @@ function VerificationResultPage() {
                   mono: true,
                 },
                 {
-                  label: "Method used",
-                  value:
-                    search.method === "number"
-                      ? "Certificate number"
-                      : search.method === "upload"
-                        ? "Document upload + OCR"
-                        : search.method === "qr"
-                          ? "QR code"
-                          : isPublicVerify
-                            ? "Direct verification"
-                            : "Reference lookup",
+                  label: "Method",
+                  value: methodLabel,
                 },
-                { label: "Requested by", value: "Public" },
+                {
+                  label: "Requested by",
+                  value: "Public",
+                },
                 {
                   label: "Timestamp",
                   value: verifiedAt ? formatDateTimeShort(verifiedAt) : "—",
