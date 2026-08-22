@@ -35,6 +35,8 @@ backend/.env
 # Frontend
 frontend/veriflow-ui/node_modules/
 frontend/veriflow-ui/.output/
+frontend/veriflow-ui/.vercel/
 frontend/veriflow-ui/.vinxi/
 frontend/veriflow-ui/.tanstack/
 frontend/veriflow-ui/.wrangler/
+frontend/veriflow-ui/tsconfig.tsbuildinfo

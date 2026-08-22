@@ -1,5 +1,4 @@
 import { v2 as cloudinary } from 'cloudinary';
-import { CloudinaryStorage } from 'multer-storage-cloudinary';
 import multer from 'multer';
 
 import { env } from '../../config/env.js';
@@ -52,18 +51,6 @@ export function isCloudinaryConfigured() {
   return isConfigured;
 }
 
-function createCloudinaryStorage(folder = env.CLOUDINARY_UPLOAD_FOLDER, params = {}) {
-  return new CloudinaryStorage({
-    cloudinary: configureCloudinary(),
-    params: {
-      folder,
-      allowed_formats: ['jpg', 'jpeg', 'png', 'pdf'],
-      transformation: [{ quality: 'auto:good', fetch_format: 'auto' }],
-      ...params,
-    },
-  });
-}
-
 const DEFAULT_ALLOWED_MIMES = [
   'image/jpeg',
   'image/jpg',
@@ -92,15 +79,8 @@ export function createUploadMiddleware({
   allowedMimes = DEFAULT_ALLOWED_MIMES,
   storageParams = {},
 } = {}) {
-  let storage;
-  if (isCloudinaryConfigured()) {
-    storage = createCloudinaryStorage(folder, storageParams);
-  } else {
-    storage = multer.memoryStorage();
-  }
-
   return multer({
-    storage,
+    storage: multer.memoryStorage(),
     limits: { fileSize: maxSizeMb * 1024 * 1024 },
     fileFilter: fileFilter(allowedMimes),
   }).single(fieldName);
